@@ -1,0 +1,2 @@
+# 2026_winter_Agents_for_Werewolf
+2026年论坛agents项目一：狼人杀
