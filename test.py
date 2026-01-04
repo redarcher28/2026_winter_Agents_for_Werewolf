@@ -9,8 +9,3 @@ def decorator2(func):
 def foo():
     pass
 foo()
-
-print(foo)
-def decorator3(func):
-    print("decorator3")
-    return func
