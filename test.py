@@ -9,3 +9,4 @@ def decorator2(func):
 def foo():
     pass
 foo()
+print("world")
