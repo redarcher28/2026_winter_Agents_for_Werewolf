@@ -10,3 +10,4 @@ def foo():
     pass
 foo()
 print("world")
+print("hello world")
