@@ -1,7 +1,6 @@
 # 创建WebSocket管理器实例
 
 import json
-
 from judge_system.web_socket import WebSocketManager
 
 ws_manager = WebSocketManager()
