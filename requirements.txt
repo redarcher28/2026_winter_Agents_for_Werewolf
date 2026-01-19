@@ -1,1 +1,4 @@
-#examples
+websockets~=15.0.1
+fastapi~=0.128.0
+pydantic~=2.12.4
+tornado~=6.5.4
