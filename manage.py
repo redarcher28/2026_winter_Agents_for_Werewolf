@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple, Union
 from enum import Enum
+from pathlib import Path
 
 from interfaces import GameStorageInterface
 from logging_config import game_logger
@@ -32,6 +33,24 @@ class GameStorageManager(GameStorageInterface):
         self.game_id = game_id
         self.base_dir = base_dir
         self.game_dir = f"{base_dir}/game_{game_id}/"
+        
+        # 转换为Path对象以便使用pathlib语法
+        self.game_dir_path = Path(self.game_dir)
+        
+        # 日志文件路径设置
+        self.log_dir = self.game_dir_path / StorageDirectoryType.LOGS.value
+        self.public_dir = self.game_dir_path / StorageDirectoryType.PUBLIC.value
+        
+        # 具体日志文件路径
+        self.game_log_path = self.log_dir / "game_events.log"
+        self.speech_log_path = self.log_dir / "public_speech.log"
+        self.vote_log_path = self.log_dir / "vote_result.log"
+        self.state_log_path = self.log_dir / "game_state.log"
+        self.wolf_log_path = self.log_dir / "wolf_communication.log"
+        
+        # 公共事件日志
+        self.public_log_path = self.public_dir / "events.jsonl"
+        
         self._game_metadata = None
         
         # 初始化日志器
@@ -111,10 +130,8 @@ class GameStorageManager(GameStorageInterface):
                 event["timestamp"] = datetime.now().isoformat()
             
             # 追加到公共事件日志
-            public_log_file = f"{self.game_dir}{StorageDirectoryType.PUBLIC.value}/events.jsonl"
-            
             # 使用JSON Lines格式（每行一个JSON对象）
-            with open(public_log_file, 'a', encoding='utf-8') as f:
+            with open(self.public_log_path, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(event, ensure_ascii=False) + '\n')
             
             # 更新最后修改时间
@@ -138,13 +155,12 @@ class GameStorageManager(GameStorageInterface):
             事件列表
         """
         events = []
-        public_log_file = f"{self.game_dir}{StorageDirectoryType.PUBLIC.value}/events.jsonl"
         
-        if not os.path.exists(public_log_file):
+        if not os.path.exists(self.public_log_path):
             return []
         
         try:
-            with open(public_log_file, 'r', encoding='utf-8') as f:
+            with open(self.public_log_path, 'r', encoding='utf-8') as f:
                 # 读取最后limit行
                 lines = f.readlines()
                 # 从最新的事件开始遍历，直到达到limit
@@ -179,7 +195,8 @@ class GameStorageManager(GameStorageInterface):
             "event_count": len(self.get_public_events(limit=1000))
         }
         
-        snapshot_file = f"{self.game_dir}{StorageDirectoryType.PUBLIC.value}/state_snapshots.jsonl"
+        # 使用pathlib构建快照文件路径
+        snapshot_file = self.public_dir / "state_snapshots.jsonl"
         
         with open(snapshot_file, 'a', encoding='utf-8') as f:
             f.write(json.dumps(snapshot, ensure_ascii=False) + '\n')
@@ -201,10 +218,13 @@ class GameStorageManager(GameStorageInterface):
             保存是否成功
         """
         try:
-            agent_dir = f"{self.game_dir}{StorageDirectoryType.AGENTS.value}/{agent_id}/"
+            # 使用pathlib构建agent目录路径
+            agent_dir_path = self.game_dir_path / StorageDirectoryType.AGENTS.value / agent_id
+            agent_dir = str(agent_dir_path)
             os.makedirs(agent_dir, exist_ok=True)
             
-            memory_file = f"{agent_dir}/memory.json"
+            # 使用pathlib构建记忆文件路径
+            memory_file = agent_dir_path / "memory.json"
             
             # 确保记忆数据有基本结构
             if "entries" not in memory_data:
@@ -239,7 +259,8 @@ class GameStorageManager(GameStorageInterface):
         Returns:
             记忆数据，如果不存在则返回None
         """
-        memory_file = f"{self.game_dir}{StorageDirectoryType.AGENTS.value}/{agent_id}/memory.json"
+        # 使用pathlib构建记忆文件路径
+        memory_file = self.game_dir_path / StorageDirectoryType.AGENTS.value / agent_id / "memory.json"
         
         if not os.path.exists(memory_file):
             return None
@@ -303,8 +324,9 @@ class GameStorageManager(GameStorageInterface):
             agent_id: Agent ID
             metrics: 指标数据
         """
-        agent_dir = f"{self.game_dir}{StorageDirectoryType.AGENTS.value}/{agent_id}/"
-        os.makedirs(agent_dir, exist_ok=True)
+        # 使用pathlib构建agent目录和指标文件路径
+        agent_dir_path = self.game_dir_path / StorageDirectoryType.AGENTS.value / agent_id
+        os.makedirs(agent_dir_path, exist_ok=True)
         
         # 确保指标有时间戳
         if "timestamp" not in metrics:
@@ -312,7 +334,7 @@ class GameStorageManager(GameStorageInterface):
         if "agent_id" not in metrics:
             metrics["agent_id"] = agent_id
         
-        metrics_file = f"{agent_dir}/metrics.jsonl"
+        metrics_file = agent_dir_path / "metrics.jsonl"
         
         with open(metrics_file, 'a', encoding='utf-8') as f:
             f.write(json.dumps(metrics, ensure_ascii=False) + '\n')
@@ -334,7 +356,8 @@ class GameStorageManager(GameStorageInterface):
         Returns:
             指标列表
         """
-        metrics_file = f"{self.game_dir}{StorageDirectoryType.AGENTS.value}/{agent_id}/metrics.jsonl"
+        # 使用pathlib构建指标文件路径
+        metrics_file = self.game_dir_path / StorageDirectoryType.AGENTS.value / agent_id / "metrics.jsonl"
         
         if not os.path.exists(metrics_file):
             return []
@@ -376,7 +399,8 @@ class GameStorageManager(GameStorageInterface):
             保存是否成功
         """
         try:
-            log_file = f"{self.game_dir}{StorageDirectoryType.LOGS.value}/agent_{agent_id}.log"
+            # 使用pathlib构建日志文件路径
+            log_file = self.log_dir / f"agent_{agent_id}.log"
             
             with open(log_file, 'a', encoding='utf-8') as f:
                 log_line = f"[{log_data.get('timestamp', datetime.now().isoformat())}] "
@@ -406,7 +430,8 @@ class GameStorageManager(GameStorageInterface):
             日志列表
         """
         logs = []
-        log_file = f"{self.game_dir}{StorageDirectoryType.LOGS.value}/agent_{agent_id}.log"
+        # 使用pathlib构建日志文件路径
+        log_file = self.log_dir / f"agent_{agent_id}.log"
         
         if not os.path.exists(log_file):
             return logs
