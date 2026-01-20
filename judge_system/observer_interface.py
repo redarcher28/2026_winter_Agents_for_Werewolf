@@ -141,7 +141,6 @@ class WSMessageType(str, Enum):
     PLAYER_STATUS = "player_status"  # 玩家状态
     ANALYSIS_UPDATE = "analysis_update"  # 分析更新
 
-
 @dataclass
 class WSMessage:
     """
@@ -185,7 +184,7 @@ class Observer:
     username: str  # 观察员用户名
     role: ObserverRole  # 观察者角色类型
     websocket: Optional[Any] = None  # WebSocket连接对象，用于实时通信
-    # subscribed_channels: Set[str] = field(default_factory=set)  # 订阅的频道集合，存储频道名称
+    subscribed_channels: Set[str] = field(default_factory=set)  # 订阅的频道集合，存储频道名称
     connected_at: float = field(default_factory=time.time)  # 时间戳
 
     def has_permission(self, permission: str) -> bool:
@@ -535,6 +534,17 @@ class GameStateMonitor:
         except Exception as e:
             logging.error(f"处理状态日志错误: {e}")
 
+    # 对于回调函数的个人理解：callback本身是回调函数的一个等待队列。对于某个检测gamestate是否有更新的函数，
+    # 一旦检测到有更新，就会把需要在更新后进行的函数加到callback清单里，清单上的函数会不断地依次执行，直到清单为零。
+    # 正确理解：
+    # 1. callback是函数引用的集合，不是任务队列
+    # 2. 当检测到更新时，代码立即执行所有回调函数
+    # _process_state_log() 内部的回调调用
+    # for callback in self.state_change_callbacks:  # 遍历列表
+    #     try:
+    #         callback(state)  # ← **立即调用执行**，不会放入队列等待
+    #     except Exception as e:
+    #         logging.error(f"状态回调错误: {e}")
     def register_state_callback(self, callback: Callable[[GameState], None]):
         """注册状态变化回调"""
         self.state_change_callbacks.append(callback)
@@ -617,580 +627,62 @@ class WebSocketServer:
         self.monitor.register_state_callback(self._on_state_change)
         self.monitor.register_speech_callback(self._on_speech)
 
+    # def _setup_static_files(self):
+    #     """设置静态文件服务"""
+    #     # 确保static目录存在
+    #     static_dir = Path("static")
+    #     static_dir.mkdir(exist_ok=True)
+    #
+    #     # 挂载静态文件目录
+    #     self.app.mount("/static", StaticFiles(directory="static"), name="static")\
+
     def _setup_routes(self):
         """设置API路由"""
 
-        @self.app.get("/")
+        @self.app.get("/")  # app是fast api对象
         async def root():
-            return HTMLResponse("""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>狼人杀观察界面</title>
-                <style>
-                    body { font-family: Arial, sans-serif; margin: 20px; }
-                    h1 { color: #333; }
-                    .status { background: #f5f5f5; padding: 10px; border-radius: 5px; }
-                </style>
-            </head>
-            <body>
-                <h1>狼人杀多Agent系统 - 观察界面</h1>
-                <div class="status">
-                    <p>WebSocket服务器运行中</p>
-                    <p>访问 <a href="/observer">观察者界面</a> 开始观察游戏</p>
-                    <p>API文档: <a href="/docs">/docs</a></p>
-                </div>
-            </body>
-            </html>
-            """)
+            """首页"""
+            # 读取外部HTML文件
+            html_file = Path("templates/index.html")
+            if html_file.exists():
+                return HTMLResponse(content=html_file.read_text(encoding="utf-8"))
+            else:
+                # 如果文件不存在，返回一个简单的响应
+                return HTMLResponse("""
+                    <html>
+                    <body>
+                        <h1>狼人杀观察界面</h1>
+                        <p>找不到模板文件，请确保 templates/index.html 存在</p>
+                    </body>
+                    </html>
+                """)
 
         @self.app.get("/observer")
         async def observer_ui():
             """观察者界面"""
-            return HTMLResponse("""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>狼人杀观察者界面</title>
-                <style>
-                    * { margin: 0; padding: 0; box-sizing: border-box; }
-                    body { 
-                        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                        min-height: 100vh;
-                        padding: 20px;
-                    }
-                    
-                    .container {
-                        max-width: 1400px;
-                        margin: 0 auto;
-                        background: white;
-                        border-radius: 15px;
-                        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-                        overflow: hidden;
-                    }
-                    
-                    header {
-                        background: linear-gradient(to right, #2c3e50, #34495e);
-                        color: white;
-                        padding: 20px 30px;
-                        display: flex;
-                        justify-content: space-between;
-                        align-items: center;
-                    }
-                    
-                    .logo {
-                        font-size: 24px;
-                        font-weight: bold;
-                        display: flex;
-                        align-items: center;
-                        gap: 10px;
-                    }
-                    
-                    .logo::before {
-                        content: "🐺";
-                        font-size: 28px;
-                    }
-                    
-                    .game-info {
-                        display: flex;
-                        gap: 30px;
-                        font-size: 14px;
-                    }
-                    
-                    .info-item {
-                        display: flex;
-                        flex-direction: column;
-                        align-items: center;
-                    }
-                    
-                    .info-value {
-                        font-size: 18px;
-                        font-weight: bold;
-                        margin-top: 5px;
-                    }
-                    
-                    .main-content {
-                        display: grid;
-                        grid-template-columns: 1fr 350px;
-                        height: 800px;
-                    }
-                    
-                    .game-area {
-                        padding: 20px;
-                        border-right: 1px solid #eee;
-                        overflow-y: auto;
-                    }
-                    
-                    .players-grid {
-                        display: grid;
-                        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                        gap: 15px;
-                        margin-bottom: 30px;
-                    }
-                    
-                    .player-card {
-                        background: #f8f9fa;
-                        border-radius: 10px;
-                        padding: 15px;
-                        border: 2px solid #e9ecef;
-                        transition: all 0.3s ease;
-                        position: relative;
-                        overflow: hidden;
-                    }
-                    
-                    .player-card:hover {
-                        transform: translateY(-5px);
-                        box-shadow: 0 10px 20px rgba(0,0,0,0.1);
-                    }
-                    
-                    .player-card.wolf {
-                        border-color: #dc3545;
-                        background: linear-gradient(135deg, #ffeaea 0%, #ffcccc 100%);
-                    }
-                    
-                    .player-card.seer {
-                        border-color: #007bff;
-                        background: linear-gradient(135deg, #e6f7ff 0%, #cceeff 100%);
-                    }
-                    
-                    .player-card.witch {
-                        border-color: #6f42c1;
-                        background: linear-gradient(135deg, #f3e5f5 0%, #e1cfe8 100%);
-                    }
-                    
-                    .player-card.villager {
-                        border-color: #28a745;
-                        background: linear-gradient(135deg, #e8f5e9 0%, #d4edda 100%);
-                    }
-                    
-                    .player-header {
-                        display: flex;
-                        justify-content: space-between;
-                        align-items: center;
-                        margin-bottom: 10px;
-                    }
-                    
-                    .player-name {
-                        font-weight: bold;
-                        font-size: 16px;
-                    }
-                    
-                    .player-role {
-                        font-size: 12px;
-                        padding: 3px 8px;
-                        border-radius: 12px;
-                        background: white;
-                        font-weight: bold;
-                    }
-                    
-                    .player-stats {
-                        font-size: 12px;
-                        color: #666;
-                        margin-top: 8px;
-                    }
-                    
-                    .stat-item {
-                        display: flex;
-                        justify-content: space-between;
-                        margin: 3px 0;
-                    }
-                    
-                    .speech-bubble {
-                        background: #e9ecef;
-                        border-radius: 15px;
-                        padding: 10px 15px;
-                        margin: 10px 0;
-                        font-size: 14px;
-                        position: relative;
-                    }
-                    
-                    .speech-bubble::before {
-                        content: '';
-                        position: absolute;
-                        top: -8px;
-                        left: 20px;
-                        width: 0;
-                        height: 0;
-                        border-left: 8px solid transparent;
-                        border-right: 8px solid transparent;
-                        border-bottom: 8px solid #e9ecef;
-                    }
-                    
-                    .controls-panel {
-                        padding: 20px;
-                        background: #f8f9fa;
-                        overflow-y: auto;
-                    }
-                    
-                    .control-group {
-                        background: white;
-                        border-radius: 10px;
-                        padding: 15px;
-                        margin-bottom: 15px;
-                        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-                    }
-                    
-                    .control-title {
-                        font-weight: bold;
-                        margin-bottom: 10px;
-                        color: #2c3e50;
-                        border-bottom: 2px solid #eee;
-                        padding-bottom: 5px;
-                    }
-                    
-                    button {
-                        background: linear-gradient(to right, #667eea, #764ba2);
-                        color: white;
-                        border: none;
-                        padding: 10px 15px;
-                        border-radius: 5px;
-                        cursor: pointer;
-                        font-weight: bold;
-                        transition: all 0.3s ease;
-                        width: 100%;
-                        margin: 5px 0;
-                    }
-                    
-                    button:hover {
-                        transform: translateY(-2px);
-                        box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-                    }
-                    
-                    .connection-status {
-                        padding: 10px;
-                        border-radius: 5px;
-                        text-align: center;
-                        margin-bottom: 15px;
-                        font-weight: bold;
-                    }
-                    
-                    .connected {
-                        background: #d4edda;
-                        color: #155724;
-                    }
-                    
-                    .disconnected {
-                        background: #f8d7da;
-                        color: #721c24;
-                    }
-                    
-                    .logs {
-                        background: #2c3e50;
-                        color: white;
-                        padding: 10px;
-                        border-radius: 5px;
-                        font-family: 'Courier New', monospace;
-                        font-size: 12px;
-                        height: 200px;
-                        overflow-y: auto;
-                        margin-top: 15px;
-                    }
-                    
-                    .log-entry {
-                        margin: 5px 0;
-                        padding: 3px 0;
-                        border-bottom: 1px solid #34495e;
-                    }
-                    
-                    .timestamp {
-                        color: #95a5a6;
-                        margin-right: 10px;
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <header>
-                        <div class="logo">狼人杀观察者控制台</div>
-                        <div class="game-info">
-                            <div class="info-item">
-                                <div>游戏阶段</div>
-                                <div class="info-value" id="game-phase">-</div>
-                            </div>
-                            <div class="info-item">
-                                <div>当前天数</div>
-                                <div class="info-value" id="day-number">-</div>
-                            </div>
-                            <div class="info-item">
-                                <div>存活玩家</div>
-                                <div class="info-value" id="alive-count">-</div>
-                            </div>
-                            <div class="info-item">
-                                <div>狼人数量</div>
-                                <div class="info-value" id="wolf-count">-</div>
-                            </div>
-                        </div>
-                    </header>
-                    
-                    <div class="main-content">
-                        <div class="game-area">
-                            <h3>玩家状态</h3>
-                            <div class="players-grid" id="players-grid">
-                                <!-- 玩家卡片将通过JavaScript动态生成 -->
-                            </div>
-                            
-                            <h3>实时发言</h3>
-                            <div id="speech-container">
-                                <!-- 发言内容将通过JavaScript动态生成 -->
-                            </div>
-                        </div>
-                        
-                        <div class="controls-panel">
-                            <div class="control-group">
-                                <div class="control-title">连接状态</div>
-                                <div class="connection-status disconnected" id="connection-status">
-                                    未连接
-                                </div>
-                                <button onclick="connectWebSocket()">连接服务器</button>
-                                <button onclick="disconnectWebSocket()">断开连接</button>
-                            </div>
-                            
-                            <div class="control-group">
-                                <div class="control-title">游戏控制</div>
-                                <button onclick="requestGameState()">刷新游戏状态</button>
-                                <button onclick="revealAllRoles()">显示所有身份</button>
-                                <button onclick="exportGameData()">导出游戏数据</button>
-                            </div>
-                            
-                            <div class="control-group">
-                                <div class="control-title">分析工具</div>
-                                <button onclick="calculateAnalysis()">重新计算分析</button>
-                                <button onclick="showVotePatterns()">显示投票模式</button>
-                                <button onclick="detectAlliances()">检测联盟关系</button>
-                            </div>
-                            
-                            <div class="control-group">
-                                <div class="control-title">系统日志</div>
-                                <div class="logs" id="system-logs">
-                                    <!-- 日志将通过JavaScript动态添加 -->
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <script>
-                    let ws = null;
-                    const logContainer = document.getElementById('system-logs');
-                    
-                    function logMessage(message, type = 'info') {
-                        const timestamp = new Date().toLocaleTimeString();
-                        const logEntry = document.createElement('div');
-                        logEntry.className = 'log-entry';
-                        logEntry.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${message}`;
-                        
-                        if (type === 'error') {
-                            logEntry.style.color = '#e74c3c';
-                        } else if (type === 'warning') {
-                            logEntry.style.color = '#f39c12';
-                        } else if (type === 'success') {
-                            logEntry.style.color = '#2ecc71';
-                        }
-                        
-                        logContainer.appendChild(logEntry);
-                        logContainer.scrollTop = logContainer.scrollHeight;
-                    }
-                    
-                    function connectWebSocket() {
-                        if (ws && ws.readyState === WebSocket.OPEN) {
-                            logMessage('已经连接到服务器', 'warning');
-                            return;
-                        }
-                        
-                        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                        const wsUrl = `${protocol}//${window.location.host}/ws/observer`;
-                        
-                        ws = new WebSocket(wsUrl);
-                        
-                        ws.onopen = function() {
-                            logMessage('成功连接到WebSocket服务器', 'success');
-                            document.getElementById('connection-status').className = 'connection-status connected';
-                            document.getElementById('connection-status').textContent = '已连接';
-                            
-                            // 订阅频道
-                            ws.send(JSON.stringify({
-                                type: 'subscribe',
-                                channels: ['game_state', 'speech', 'game_events']
-                            }));
-                        };
-                        
-                        ws.onmessage = function(event) {
-                            try {
-                                const data = JSON.parse(event.data);
-                                handleWebSocketMessage(data);
-                            } catch (error) {
-                                logMessage('解析消息失败: ' + error, 'error');
-                            }
-                        };
-                        
-                        ws.onclose = function() {
-                            logMessage('WebSocket连接已关闭', 'warning');
-                            document.getElementById('connection-status').className = 'connection-status disconnected';
-                            document.getElementById('connection-status').textContent = '未连接';
-                        };
-                        
-                        ws.onerror = function(error) {
-                            logMessage('WebSocket错误: ' + error, 'error');
-                        };
-                    }
-                    
-                    function disconnectWebSocket() {
-                        if (ws) {
-                            ws.close();
-                            ws = null;
-                        }
-                    }
-                    
-                    function handleWebSocketMessage(message) {
-                        switch(message.type) {
-                            case 'game_state':
-                                updateGameState(message.data);
-                                break;
-                            case 'speech':
-                                addSpeechMessage(message.data);
-                                break;
-                            case 'game_event':
-                                logMessage(`事件: ${message.data.description}`, 'info');
-                                break;
-                            case 'system_alert':
-                                logMessage(`系统: ${message.data.message}`, 'warning');
-                                break;
-                        }
-                    }
-                    
-                    function updateGameState(state) {
-                        // 更新游戏信息
-                        document.getElementById('game-phase').textContent = state.phase;
-                        document.getElementById('day-number').textContent = state.day_number;
-                        document.getElementById('alive-count').textContent = state.alive_players.length;
-                        
-                        // 更新玩家网格
-                        const playersGrid = document.getElementById('players-grid');
-                        playersGrid.innerHTML = '';
-                        
-                        // 这里应该根据实际数据更新玩家卡片
-                        // 简化示例
-                        const samplePlayers = [
-                            {id: 'player1', name: '玩家1', role: 'werewolf', alive: true},
-                            {id: 'player2', name: '玩家2', role: 'seer', alive: true},
-                            {id: 'player3', name: '玩家3', role: 'villager', alive: true},
-                            {id: 'player4', name: '玩家4', role: 'werewolf', alive: true},
-                            {id: 'player5', name: '玩家5', role: 'witch', alive: true},
-                            {id: 'player6', name: '玩家6', role: 'villager', alive: true},
-                        ];
-                        
-                        samplePlayers.forEach(player => {
-                            const card = document.createElement('div');
-                            card.className = `player-card ${player.role}`;
-                            card.id = `player-${player.id}`;
-                            
-                            const roleNames = {
-                                werewolf: '🐺 狼人',
-                                seer: '🔮 预言家',
-                                witch: '🧪 女巫',
-                                villager: '👨🌾 村民'
-                            };
-                            
-                            card.innerHTML = `
-                                <div class="player-header">
-                                    <div class="player-name">${player.name}</div>
-                                    <div class="player-role">${roleNames[player.role]}</div>
-                                </div>
-                                <div class="player-stats">
-                                    <div class="stat-item">
-                                        <span>状态:</span>
-                                        <span>${player.alive ? '存活' : '死亡'}</span>
-                                    </div>
-                                    <div class="stat-item">
-                                        <span>怀疑指数:</span>
-                                        <span>65%</span>
-                                    </div>
-                                    <div class="stat-item">
-                                        <span>发言次数:</span>
-                                        <span>3</span>
-                                    </div>
-                                </div>
-                            `;
-                            
-                            playersGrid.appendChild(card);
-                        });
-                    }
-                    
-                    function addSpeechMessage(speech) {
-                        const speechContainer = document.getElementById('speech-container');
-                        const bubble = document.createElement('div');
-                        bubble.className = 'speech-bubble';
-                        
-                        const time = new Date(speech.timestamp * 1000).toLocaleTimeString();
-                        bubble.innerHTML = `
-                            <strong>${speech.player_name} [${time}]:</strong><br>
-                            ${speech.text}
-                        `;
-                        
-                        speechContainer.appendChild(bubble);
-                        speechContainer.scrollTop = speechContainer.scrollHeight;
-                        
-                        // 限制最多显示10条发言
-                        const bubbles = speechContainer.getElementsByClassName('speech-bubble');
-                        if (bubbles.length > 10) {
-                            speechContainer.removeChild(bubbles[0]);
-                        }
-                    }
-                    
-                    function requestGameState() {
-                        if (ws && ws.readyState === WebSocket.OPEN) {
-                            ws.send(JSON.stringify({
-                                type: 'request_state'
-                            }));
-                            logMessage('已请求游戏状态', 'info');
-                        }
-                    }
-                    
-                    function revealAllRoles() {
-                        logMessage('显示所有玩家身份 (管理员功能)', 'warning');
-                        // 这里可以添加显示所有角色的逻辑
-                    }
-                    
-                    function exportGameData() {
-                        logMessage('导出游戏数据功能', 'info');
-                        // 这里可以添加导出数据的逻辑
-                    }
-                    
-                    function calculateAnalysis() {
-                        logMessage('重新计算分析指标', 'info');
-                        // 这里可以添加分析计算的逻辑
-                    }
-                    
-                    function showVotePatterns() {
-                        logMessage('显示投票模式分析', 'info');
-                        // 这里可以添加投票分析的逻辑
-                    }
-                    
-                    function detectAlliances() {
-                        logMessage('检测玩家联盟关系', 'info');
-                        // 这里可以添加联盟检测的逻辑
-                    }
-                    
-                    // 页面加载时自动连接
-                    window.onload = function() {
-                        logMessage('观察者界面已加载', 'info');
-                        // 自动连接可以在这里启用
-                        // connectWebSocket();
-                    };
-                </script>
-            </body>
-            </html>
-            """)
+            # 读取外部HTML文件
+            html_file = Path("templates/observer.html")
+            if html_file.exists():
+                return HTMLResponse(content=html_file.read_text(encoding="utf-8"))
+            else:
+                # 如果文件不存在，返回一个简单的响应
+                return HTMLResponse("""
+                            <html>
+                            <body>
+                                <h1>观察者界面</h1>
+                                <p>找不到模板文件，请确保 templates/observer.html 存在</p>
+                            </body>
+                            </html>
+                        """)
 
         @self.app.websocket("/ws/observer")
         async def websocket_endpoint(websocket: WebSocket):
-            """WebSocket端点"""
-            # 创建观察者（这里简化，实际应该从认证获取）
+            """WebSocket终端"""
+            # 创建管理者（这里简化，实际应该从认证获取）
             observer = Observer(
                 observer_id=str(uuid.uuid4()),
                 username=f"Observer_{int(time.time())}",
-                role=ObserverRole.VIEWER  # 默认作为观察者
+                role=ObserverRole.ADMIN  # 默认作为管理者
             )
 
             await self.manager.connect(observer, websocket)
@@ -1201,8 +693,8 @@ class WebSocketServer:
                     data = await websocket.receive_text()
 
                     try:
-                        message = json.loads(data)
-                        await self._handle_client_message(observer, message)
+                        message = json.loads(data)  # 将接收到的消息用json字符串格式存储到message中
+                        await self._handle_client_message(observer, message)  #
                     except json.JSONDecodeError:
                         error_msg = WSMessage(
                             type=WSMessageType.SYSTEM_ALERT,
@@ -1255,6 +747,15 @@ class WebSocketServer:
             # 这里可以添加导出逻辑
             return JSONResponse({"success": True, "message": "导出功能开发中"})
 
+    # class WSMessageType(str, Enum):
+    #     """WebSocket消息类型"""
+    #     GAME_STATE = "game_state"  # 游戏状态
+    #     SPEECH = "speech"  # 发言
+    #     VOTE_UPDATE = "vote_update"  # 投票更新
+    #     GAME_EVENT = "game_event"  # 游戏事件
+    #     SYSTEM_ALERT = "system_alert"  # 系统警告
+    #     PLAYER_STATUS = "player_status"  # 玩家状态
+    #     ANALYSIS_UPDATE = "analysis_update"  # 分析更新
     async def _handle_client_message(self, observer: Observer, message: Dict[str, Any]):
         """处理客户端消息"""
         msg_type = message.get("type")
@@ -1312,7 +813,7 @@ class WebSocketServer:
         )
         await self.manager.broadcast_to_channel(message, "speech")
 
-    def run(self, host: str = "0.0.0.0", port: int = 8000):
+    def run(self, host: str = "127.0.0.1", port: int = 8000):
         """运行服务器"""
         import uvicorn
         uvicorn.run(self.app, host=host, port=port)

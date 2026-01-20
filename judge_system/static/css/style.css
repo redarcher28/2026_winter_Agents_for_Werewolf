@@ -1,0 +1,249 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    padding: 20px;
+}
+
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    background: white;
+    border-radius: 15px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    overflow: hidden;
+}
+
+header {
+    background: linear-gradient(to right, #2c3e50, #34495e);
+    color: white;
+    padding: 20px 30px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.logo {
+    font-size: 24px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.logo::before {
+    content: "🐺";
+    font-size: 28px;
+}
+
+.game-info {
+    display: flex;
+    gap: 30px;
+    font-size: 14px;
+}
+
+.info-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.info-value {
+    font-size: 18px;
+    font-weight: bold;
+    margin-top: 5px;
+}
+
+.main-content {
+    display: grid;
+    grid-template-columns: 1fr 350px;
+    height: 800px;
+}
+
+.game-area {
+    padding: 20px;
+    border-right: 1px solid #eee;
+    overflow-y: auto;
+}
+
+.players-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    margin-bottom: 30px;
+}
+
+.player-card {
+    background: #f8f9fa;
+    border-radius: 10px;
+    padding: 15px;
+    border: 2px solid #e9ecef;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.player-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+}
+
+.player-card.wolf {
+    border-color: #dc3545;
+    background: linear-gradient(135deg, #ffeaea 0%, #ffcccc 100%);
+}
+
+.player-card.seer {
+    border-color: #007bff;
+    background: linear-gradient(135deg, #e6f7ff 0%, #cceeff 100%);
+}
+
+.player-card.witch {
+    border-color: #6f42c1;
+    background: linear-gradient(135deg, #f3e5f5 0%, #e1cfe8 100%);
+}
+
+.player-card.villager {
+    border-color: #28a745;
+    background: linear-gradient(135deg, #e8f5e9 0%, #d4edda 100%);
+}
+
+.player-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.player-name {
+    font-weight: bold;
+    font-size: 16px;
+}
+
+.player-role {
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    background: white;
+    font-weight: bold;
+}
+
+.player-stats {
+    font-size: 12px;
+    color: #666;
+    margin-top: 8px;
+}
+
+.stat-item {
+    display: flex;
+    justify-content: space-between;
+    margin: 3px 0;
+}
+
+.speech-bubble {
+    background: #e9ecef;
+    border-radius: 15px;
+    padding: 10px 15px;
+    margin: 10px 0;
+    font-size: 14px;
+    position: relative;
+}
+
+.speech-bubble::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    left: 20px;
+    width: 0;
+    height: 0;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-bottom: 8px solid #e9ecef;
+}
+
+.controls-panel {
+    padding: 20px;
+    background: #f8f9fa;
+    overflow-y: auto;
+}
+
+.control-group {
+    background: white;
+    border-radius: 10px;
+    padding: 15px;
+    margin-bottom: 15px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+}
+
+.control-title {
+    font-weight: bold;
+    margin-bottom: 10px;
+    color: #2c3e50;
+    border-bottom: 2px solid #eee;
+    padding-bottom: 5px;
+}
+
+button {
+    background: linear-gradient(to right, #667eea, #764ba2);
+    color: white;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: all 0.3s ease;
+    width: 100%;
+    margin: 5px 0;
+}
+
+button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+}
+
+.connection-status {
+    padding: 10px;
+    border-radius: 5px;
+    text-align: center;
+    margin-bottom: 15px;
+    font-weight: bold;
+}
+
+.connected {
+    background: #d4edda;
+    color: #155724;
+}
+
+.disconnected {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.logs {
+    background: #2c3e50;
+    color: white;
+    padding: 10px;
+    border-radius: 5px;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    height: 200px;
+    overflow-y: auto;
+    margin-top: 15px;
+}
+
+.log-entry {
+    margin: 5px 0;
+    padding: 3px 0;
+    border-bottom: 1px solid #34495e;
+}
+
+.timestamp {
+    color: #95a5a6;
+    margin-right: 10px;
+}
