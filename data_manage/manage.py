@@ -8,16 +8,8 @@ from typing import Dict, List, Any, Optional, Tuple, Union
 from enum import Enum
 from pathlib import Path
 
-from interfaces import GameStorageInterface
+from interfaces import GameStorageInterface, EventType, GamePhase, StorageDirectoryType
 from logging_config import game_logger
-
-class StorageDirectoryType(Enum):
-    """存储目录类型枚举"""
-    PUBLIC = "public"      # 公开数据
-    AGENTS = "agents"      # 智能体数据
-    LOGS = "logs"          # 日志数据
-    BACKUPS = "backups"    # 备份数据
-    CONFIG = "config"      # 配置数据
 
 class GameStorageManager(GameStorageInterface):
     """游戏数据存储管理器"""
@@ -64,7 +56,8 @@ class GameStorageManager(GameStorageInterface):
     
     def _init_game_metadata(self):
         """初始化游戏元数据"""
-        metadata_file = f"{self.game_dir}config/metadata.json"
+        # 使用pathlib构建元数据文件路径
+        metadata_file = self.game_dir_path / StorageDirectoryType.CONFIG.value / "metadata.json"
         if not os.path.exists(metadata_file):
             self._game_metadata = {
                 "game_id": self.game_id,
@@ -79,14 +72,15 @@ class GameStorageManager(GameStorageInterface):
     
     def _ensure_directories(self):
         """确保所有必要的目录都存在"""
+        # 使用pathlib构建所有必要的目录路径
         directories = [
-            self.base_dir,
-            self.game_dir,
-            f"{self.game_dir}{StorageDirectoryType.PUBLIC.value}/",
-            f"{self.game_dir}{StorageDirectoryType.AGENTS.value}/",
-            f"{self.game_dir}{StorageDirectoryType.LOGS.value}/",
-            f"{self.game_dir}{StorageDirectoryType.BACKUPS.value}/",
-            f"{self.game_dir}{StorageDirectoryType.CONFIG.value}/",
+            Path(self.base_dir),  # 基础目录
+            self.game_dir_path,  # 游戏目录
+            self.game_dir_path / StorageDirectoryType.PUBLIC.value,  # 公开数据目录
+            self.game_dir_path / StorageDirectoryType.AGENTS.value,  # 智能体数据目录
+            self.game_dir_path / StorageDirectoryType.LOGS.value,  # 日志数据目录
+            self.game_dir_path / StorageDirectoryType.BACKUPS.value,  # 备份数据目录
+            self.game_dir_path / StorageDirectoryType.CONFIG.value,  # 配置数据目录
         ]
         
         for directory in directories:
@@ -96,7 +90,8 @@ class GameStorageManager(GameStorageInterface):
         """保存游戏元数据"""
         if self._game_metadata:
             try:
-                metadata_file = f"{self.game_dir}{StorageDirectoryType.CONFIG.value}/metadata.json"
+                # 使用pathlib构建元数据文件路径
+                metadata_file = self.game_dir_path / StorageDirectoryType.CONFIG.value / "metadata.json"
                 with open(metadata_file, "w", encoding="utf-8") as f:
                     json.dump(self._game_metadata, f, ensure_ascii=False, indent=2)
                 self.logger.debug(f"Game metadata saved for game {self.game_id}")
@@ -134,6 +129,9 @@ class GameStorageManager(GameStorageInterface):
             with open(self.public_log_path, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(event, ensure_ascii=False) + '\n')
             
+            # 同时保存到game_events.log以支持WebSocket API网关
+            self.save_game_event(event)
+            
             # 更新最后修改时间
             self._update_last_modified()
             self.logger.debug(f"Saved public event: {event.get('event_type')}")
@@ -143,7 +141,7 @@ class GameStorageManager(GameStorageInterface):
             return False
     
     def get_public_events(self, event_type: Optional[str] = None, 
-                         limit: int = 100) -> List[Dict]:
+                         limit: int = 100) -> List[Dict[str, Any]]:
         """
         获取公共事件
         
@@ -176,7 +174,7 @@ class GameStorageManager(GameStorageInterface):
                     except json.JSONDecodeError as e:
                         continue
         except Exception as e:
-            print(f"Error reading public events: {e}")
+            self.logger.error(f"Error reading public events: {e}")
         
         return events
     
@@ -204,6 +202,173 @@ class GameStorageManager(GameStorageInterface):
         # 更新最后修改时间
         self._update_last_modified()
     
+    def save_game_event(self, event_data: Dict[str, Any]) -> bool:
+        """
+        保存游戏事件到game_events.log
+        
+        Args:
+            event_data: 游戏事件数据
+            
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 确保事件数据包含必要字段
+            event = {
+                "event_id": event_data.get("event_id", f"evt_{uuid.uuid4().hex[:8]}"),
+                "event_type": event_data.get("event_type", EventType.UNKNOWN.value),
+                "player_id": event_data.get("player_id"),
+                "target_id": event_data.get("target_id"),
+                "description": event_data.get("description", ""),
+                "timestamp": event_data.get("timestamp", datetime.now().timestamp()),
+                "metadata": event_data.get("metadata", {})
+            }
+            
+            with open(self.game_log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(event, ensure_ascii=False) + '\n')
+            
+            self._update_last_modified()
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving game event: {e}")
+            return False
+    
+    def save_speech(self, speech_data: Dict[str, Any]) -> bool:
+        """
+        保存发言记录到public_speech.log
+        
+        Args:
+            speech_data: 发言数据
+            
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 确保发言数据包含必要字段
+            speech = {
+                "speech_id": speech_data.get("speech_id", f"spch_{uuid.uuid4().hex[:8]}"),
+                "player_id": speech_data.get("player_id", ""),
+                "player_name": speech_data.get("player_name", "Unknown"),
+                "text": speech_data.get("text", ""),
+                "timestamp": speech_data.get("timestamp", datetime.now().timestamp()),
+                "sentiment": speech_data.get("sentiment"),
+                "confidence": speech_data.get("confidence", 1.0),
+                "keywords": speech_data.get("keywords", [])
+            }
+            
+            with open(self.speech_log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(speech, ensure_ascii=False) + '\n')
+            
+            self._update_last_modified()
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving speech: {e}")
+            return False
+    
+    def save_vote(self, vote_data: Dict[str, Any]) -> bool:
+        """
+        保存投票结果到vote_result.log
+        
+        Args:
+            vote_data: 投票数据
+            
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 确保投票数据包含必要字段
+            vote = {
+                "round_id": vote_data.get("round_id", f"vote_{uuid.uuid4().hex[:8]}"),
+                "day_number": vote_data.get("day_number", 1),
+                "candidates": vote_data.get("candidates", []),
+                "votes": vote_data.get("votes", {}),
+                "result": vote_data.get("result"),
+                "timestamp": vote_data.get("timestamp", datetime.now().timestamp())
+            }
+            
+            with open(self.vote_log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(vote, ensure_ascii=False) + '\n')
+            
+            self._update_last_modified()
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving vote: {e}")
+            return False
+    
+    def save_game_state(self, state_data: Dict[str, Any]) -> bool:
+        """
+        保存游戏状态到game_state.log
+        
+        Args:
+            state_data: 游戏状态数据
+            
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 确保状态数据包含必要字段
+            phase_value = state_data.get("phase", "UNKNOWN")
+            
+            # 验证phase值是否有效
+            if phase_value != "UNKNOWN":
+                try:
+                    # 转换为GamePhase枚举
+                    phase = GamePhase(phase_value)
+                    phase_value = phase.value
+                except ValueError:
+                    # 如果无效，使用默认值
+                    phase_value = GamePhase.DAY.value
+            
+            game_state = {
+                "game_id": state_data.get("game_id", self.game_id),
+                "phase": phase_value,
+                "day_number": state_data.get("day_number", 1),
+                "alive_players": state_data.get("alive_players", []),
+                "dead_players": state_data.get("dead_players", []),
+                "timestamp": state_data.get("timestamp", datetime.now().timestamp()),
+                "current_speaker": state_data.get("current_speaker"),
+                "vote_results": state_data.get("vote_results"),
+                "last_night_actions": state_data.get("last_night_actions")
+            }
+            
+            with open(self.state_log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(game_state, ensure_ascii=False) + '\n')
+            
+            self._update_last_modified()
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving game state: {e}")
+            return False
+    
+    def save_wolf_communication(self, communication_data: Dict[str, Any]) -> bool:
+        """
+        保存狼人通信到wolf_communication.log
+        
+        Args:
+            communication_data: 狼人通信数据
+            
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 确保通信数据包含必要字段
+            communication = {
+                "communication_id": communication_data.get("communication_id", f"wolf_{uuid.uuid4().hex[:8]}"),
+                "player_id": communication_data.get("player_id", ""),
+                "message": communication_data.get("message", ""),
+                "timestamp": communication_data.get("timestamp", datetime.now().timestamp()),
+                "metadata": communication_data.get("metadata", {})
+            }
+            
+            with open(self.wolf_log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(communication, ensure_ascii=False) + '\n')
+            
+            self._update_last_modified()
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving wolf communication: {e}")
+            return False
+
     # ============ Agent私有数据存储 ============
     
     def save_agent_memory(self, agent_id: str, memory_data: Dict[str, Any]) -> bool:
@@ -381,7 +546,7 @@ class GameStorageManager(GameStorageInterface):
                     except json.JSONDecodeError:
                         continue
         except Exception as e:
-            print(f"Error reading agent metrics: {e}")
+            self.logger.error(f"Error reading agent metrics: {e}")
         
         return metrics
     
@@ -512,7 +677,7 @@ class GameStorageManager(GameStorageInterface):
             # 清理旧备份
             self._cleanup_old_backups(backup_dir, filename, max_backups)
         except Exception as e:
-            print(f"Error backing up file {filepath}: {e}")
+            self.logger.error(f"Error backing up file {filepath}: {e}")
     
     def _cleanup_old_backups(self, backup_dir: str, 
                             filename_prefix: str, 
@@ -548,13 +713,13 @@ class GameStorageManager(GameStorageInterface):
                     os.remove(old_file)
                     deleted_count += 1
                 except Exception as delete_e:
-                    print(f"Error deleting old backup {old_file}: {delete_e}")
+                    self.logger.error(f"Error deleting old backup {old_file}: {delete_e}")
             
             if deleted_count > 0:
                 pass  # 可以添加日志记录
                         
         except Exception as e:
-            print(f"Error cleaning up backups in {backup_dir}: {e}")
+            self.logger.error(f"Error cleaning up backups in {backup_dir}: {e}")
     
     def get_storage_summary(self) -> Dict[str, Any]:
         """
@@ -633,5 +798,5 @@ class GameStorageManager(GameStorageInterface):
                 return True
             return False
         except Exception as e:
-            print(f"Error updating game metadata: {e}")
+            self.logger.error(f"Error updating game metadata: {e}")
             return False
