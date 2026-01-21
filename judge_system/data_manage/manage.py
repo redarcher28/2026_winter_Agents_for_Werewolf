@@ -81,6 +81,9 @@ class GameStorageManager(GameStorageInterface):
             self.game_dir_path / StorageDirectoryType.LOGS.value,  # 日志数据目录
             self.game_dir_path / StorageDirectoryType.BACKUPS.value,  # 备份数据目录
             self.game_dir_path / StorageDirectoryType.CONFIG.value,  # 配置数据目录
+            self.game_dir_path / StorageDirectoryType.PRIVATE.value,  # 私有数据目录
+            self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles",  # 角色特定数据目录
+            self.game_dir_path / StorageDirectoryType.PRIVATE.value / "factions",  # 阵营数据目录
         ]
         
         for directory in directories:
@@ -800,3 +803,109 @@ class GameStorageManager(GameStorageInterface):
         except Exception as e:
             self.logger.error(f"Error updating game metadata: {e}")
             return False
+    
+    def save_role_specific_data(self, role: str, data: Dict[str, Any]) -> bool:
+        """
+        保存角色特定数据
+        
+        Args:
+            role: 角色类型
+            data: 角色特定数据
+            
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 构建角色数据文件路径
+            role_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / f"{role}.json"
+            
+            # 确保目录存在
+            os.makedirs(os.path.dirname(role_file), exist_ok=True)
+            
+            # 保存数据
+            with open(role_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            
+            # 更新最后修改时间
+            self._update_last_modified()
+            self.logger.debug(f"Saved role specific data for {role}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving role specific data for {role}: {e}")
+            return False
+    
+    def get_role_specific_data(self, role: str) -> Optional[Dict[str, Any]]:
+        """
+        获取角色特定数据
+        
+        Args:
+            role: 角色类型
+            
+        Returns:
+            角色特定数据，如果不存在则返回None
+        """
+        # 构建角色数据文件路径
+        role_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / f"{role}.json"
+        
+        if not os.path.exists(role_file):
+            return None
+        
+        try:
+            with open(role_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            self.logger.error(f"Error loading role specific data for {role}: {e}")
+            return None
+    
+    def save_faction_data(self, faction: str, data: Dict[str, Any]) -> bool:
+        """
+        保存阵营数据
+        
+        Args:
+            faction: 阵营类型
+            data: 阵营数据
+            
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 构建阵营数据文件路径
+            faction_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "factions" / f"{faction}.json"
+            
+            # 确保目录存在
+            os.makedirs(os.path.dirname(faction_file), exist_ok=True)
+            
+            # 保存数据
+            with open(faction_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            
+            # 更新最后修改时间
+            self._update_last_modified()
+            self.logger.debug(f"Saved faction data for {faction}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving faction data for {faction}: {e}")
+            return False
+    
+    def get_faction_data(self, faction: str) -> Optional[Dict[str, Any]]:
+        """
+        获取阵营数据
+        
+        Args:
+            faction: 阵营类型
+            
+        Returns:
+            阵营数据，如果不存在则返回None
+        """
+        # 构建阵营数据文件路径
+        faction_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "factions" / f"{faction}.json"
+        
+        if not os.path.exists(faction_file):
+            return None
+        
+        try:
+            with open(faction_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            self.logger.error(f"Error loading faction data for {faction}: {e}")
+            return None

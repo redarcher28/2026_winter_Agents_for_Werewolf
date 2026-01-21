@@ -219,7 +219,7 @@ class GameControlService:
             
             # 记录快照恢复事件
             storage_manager.save_public_event({
-                "event_type": "snapshot_loaded",
+                "event_type": EventType.SNAPSHOT_LOADED.value,
                 "snapshot_id": snapshot_id,
                 "timestamp": datetime.now().isoformat()
             })
