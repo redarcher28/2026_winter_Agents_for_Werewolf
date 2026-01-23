@@ -9,7 +9,7 @@ from enum import Enum
 from pathlib import Path
 
 from interfaces import GameStorageInterface, EventType, GamePhase, StorageDirectoryType
-from logging_config import game_logger
+from judge_system.data_manage.logging_config import game_logger
 
 class GameStorageManager(GameStorageInterface):
     """游戏数据存储管理器"""
@@ -31,17 +31,16 @@ class GameStorageManager(GameStorageInterface):
         
         # 日志文件路径设置
         self.log_dir = self.game_dir_path / StorageDirectoryType.LOGS.value
-        self.public_dir = self.game_dir_path / StorageDirectoryType.PUBLIC.value
         
         # 具体日志文件路径
         self.game_log_path = self.log_dir / "game_events.log"
         self.speech_log_path = self.log_dir / "public_speech.log"
         self.vote_log_path = self.log_dir / "vote_result.log"
         self.state_log_path = self.log_dir / "game_state.log"
-        self.wolf_log_path = self.log_dir / "wolf_communication.log"
+        # 狼人通信日志移动到私有目录
+        self.wolf_log_path = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / "wolf_communication.log"
         
-        # 公共事件日志
-        self.public_log_path = self.public_dir / "events.jsonl"
+        # 公共事件日志现在直接使用game_events.log，不再单独存储
         
         self._game_metadata = None
         
@@ -76,14 +75,12 @@ class GameStorageManager(GameStorageInterface):
         directories = [
             Path(self.base_dir),  # 基础目录
             self.game_dir_path,  # 游戏目录
-            self.game_dir_path / StorageDirectoryType.PUBLIC.value,  # 公开数据目录
             self.game_dir_path / StorageDirectoryType.AGENTS.value,  # 智能体数据目录
             self.game_dir_path / StorageDirectoryType.LOGS.value,  # 日志数据目录
             self.game_dir_path / StorageDirectoryType.BACKUPS.value,  # 备份数据目录
             self.game_dir_path / StorageDirectoryType.CONFIG.value,  # 配置数据目录
             self.game_dir_path / StorageDirectoryType.PRIVATE.value,  # 私有数据目录
             self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles",  # 角色特定数据目录
-            self.game_dir_path / StorageDirectoryType.PRIVATE.value / "factions",  # 阵营数据目录
         ]
         
         for directory in directories:
@@ -127,12 +124,7 @@ class GameStorageManager(GameStorageInterface):
             if "timestamp" not in event:
                 event["timestamp"] = datetime.now().isoformat()
             
-            # 追加到公共事件日志
-            # 使用JSON Lines格式（每行一个JSON对象）
-            with open(self.public_log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(event, ensure_ascii=False) + '\n')
-            
-            # 同时保存到game_events.log以支持WebSocket API网关
+            # 直接保存到game_events.log，不再单独存储公共事件日志
             self.save_game_event(event)
             
             # 更新最后修改时间
@@ -157,11 +149,11 @@ class GameStorageManager(GameStorageInterface):
         """
         events = []
         
-        if not os.path.exists(self.public_log_path):
+        if not os.path.exists(self.game_log_path):
             return []
         
         try:
-            with open(self.public_log_path, 'r', encoding='utf-8') as f:
+            with open(self.game_log_path, 'r', encoding='utf-8') as f:
                 # 读取最后limit行
                 lines = f.readlines()
                 # 从最新的事件开始遍历，直到达到limit
@@ -180,30 +172,6 @@ class GameStorageManager(GameStorageInterface):
             self.logger.error(f"Error reading public events: {e}")
         
         return events
-    
-    def save_game_state_snapshot(self, state: Dict[str, Any]):
-        """
-        保存游戏状态快照
-        
-        Args:
-            state: 游戏状态
-        """
-        snapshot = {
-            "game_id": self.game_id,
-            "snapshot_id": f"snap_{uuid.uuid4().hex[:12]}",
-            "timestamp": datetime.now().isoformat(),
-            "state": state,
-            "event_count": len(self.get_public_events(limit=1000))
-        }
-        
-        # 使用pathlib构建快照文件路径
-        snapshot_file = self.public_dir / "state_snapshots.jsonl"
-        
-        with open(snapshot_file, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(snapshot, ensure_ascii=False) + '\n')
-        
-        # 更新最后修改时间
-        self._update_last_modified()
     
     def save_game_event(self, event_data: Dict[str, Any]) -> bool:
         """
@@ -552,105 +520,7 @@ class GameStorageManager(GameStorageInterface):
             self.logger.error(f"Error reading agent metrics: {e}")
         
         return metrics
-    
-    # ============ 日志存储 ============
-    
-    def save_agent_log(self, agent_id: str, log_data: Dict[str, Any]) -> bool:
-        """
-        保存Agent日志
-        
-        Args:
-            agent_id: Agent ID
-            log_data: 日志数据
-            
-        Returns:
-            保存是否成功
-        """
-        try:
-            # 使用pathlib构建日志文件路径
-            log_file = self.log_dir / f"agent_{agent_id}.log"
-            
-            with open(log_file, 'a', encoding='utf-8') as f:
-                log_line = f"[{log_data.get('timestamp', datetime.now().isoformat())}] "
-                log_line += f"[{log_data.get('level', 'INFO')}] "
-                log_line += f"{log_data.get('message', '')}\n"
-                f.write(log_line)
-            
-            # 更新最后修改时间
-            self._update_last_modified()
-            self.logger.debug(f"Saved agent log for {agent_id}")
-            return True
-        except Exception as e:
-            self.logger.error(f"Error saving agent log for {agent_id}: {e}")
-            return False
-    
-    def get_agent_logs(self, agent_id: str, log_type: Optional[str] = None, 
-                     limit: int = 100) -> List[Dict[str, Any]]:
-        """
-        获取智能体日志列表
-        
-        Args:
-            agent_id: 智能体ID
-            log_type: 日志类型
-            limit: 日志数量限制
-            
-        Returns:
-            日志列表
-        """
-        logs = []
-        # 使用pathlib构建日志文件路径
-        log_file = self.log_dir / f"agent_{agent_id}.log"
-        
-        if not os.path.exists(log_file):
-            return logs
-        
-        try:
-            with open(log_file, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            
-            # 解析日志行
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                    
-                # 解析日志格式: [timestamp] [level] message
-                try:
-                    timestamp_end = line.index(']')
-                    timestamp = line[1:timestamp_end].strip()
-                    
-                    level_start = line.index('[', timestamp_end) + 1
-                    level_end = line.index(']', level_start)
-                    level = line[level_start:level_end].strip()
-                    
-                    message = line[level_end + 1:].strip()
-                    
-                    log_entry = {
-                        "timestamp": timestamp,
-                        "level": level,
-                        "message": message
-                    }
-                    
-                    # 如果指定了日志类型（level），则过滤
-                    if log_type and log_entry["level"] != log_type:
-                        continue
-                    
-                    logs.append(log_entry)
-                    
-                except ValueError:
-                    # 如果日志格式不符合预期，跳过该行
-                    continue
-            
-            # 限制返回数量
-            if limit > 0:
-                logs = logs[-limit:]
-            
-            return logs
-            
-        except Exception as e:
-            self.logger.error(f"Error getting agent logs: {e}")
-            return []
-    
+
     # ============ 实用方法 ============
     
     def _backup_file(self, filepath: str, max_backups: int = 5):
@@ -766,7 +636,7 @@ class GameStorageManager(GameStorageInterface):
             summary["file_counts"] = file_counts
             summary["directory_counts"] = directory_counts
             
-            # 添加事件和快照数量
+            # 添加事件数量
             summary["public_events_count"] = len(self.get_public_events(limit=10000))
             
         except Exception as e:
@@ -857,55 +727,153 @@ class GameStorageManager(GameStorageInterface):
             self.logger.error(f"Error loading role specific data for {role}: {e}")
             return None
     
-    def save_faction_data(self, faction: str, data: Dict[str, Any]) -> bool:
+    def save_witch_action(self, witch_id: str, action: Dict[str, Any]) -> bool:
         """
-        保存阵营数据
+        保存女巫行动（私有数据）
         
         Args:
-            faction: 阵营类型
-            data: 阵营数据
+            witch_id: 女巫的Agent ID
+            action: 女巫行动数据，包含是否使用解药、是否使用毒药、选择的目标等
             
         Returns:
             保存是否成功
         """
         try:
-            # 构建阵营数据文件路径
-            faction_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "factions" / f"{faction}.json"
+            # 构建女巫私有数据文件路径
+            witch_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / "witch.json"
             
             # 确保目录存在
-            os.makedirs(os.path.dirname(faction_file), exist_ok=True)
+            os.makedirs(os.path.dirname(witch_file), exist_ok=True)
             
             # 保存数据
-            with open(faction_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            with open(witch_file, 'w', encoding='utf-8') as f:
+                json.dump(action, f, ensure_ascii=False, indent=2)
             
             # 更新最后修改时间
             self._update_last_modified()
-            self.logger.debug(f"Saved faction data for {faction}")
+            self.logger.debug(f"Saved witch action for {witch_id}")
             return True
         except Exception as e:
-            self.logger.error(f"Error saving faction data for {faction}: {e}")
+            self.logger.error(f"Error saving witch action for {witch_id}: {e}")
             return False
     
-    def get_faction_data(self, faction: str) -> Optional[Dict[str, Any]]:
+    def get_witch_action(self) -> Optional[Dict[str, Any]]:
         """
-        获取阵营数据
+        获取女巫行动（私有数据）
         
-        Args:
-            faction: 阵营类型
-            
         Returns:
-            阵营数据，如果不存在则返回None
+            女巫行动数据，如果不存在则返回None
         """
-        # 构建阵营数据文件路径
-        faction_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "factions" / f"{faction}.json"
+        # 构建女巫私有数据文件路径
+        witch_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / "witch.json"
         
-        if not os.path.exists(faction_file):
+        if not os.path.exists(witch_file):
             return None
         
         try:
-            with open(faction_file, 'r', encoding='utf-8') as f:
+            with open(witch_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            self.logger.error(f"Error loading faction data for {faction}: {e}")
+            self.logger.error(f"Error loading witch action: {e}")
             return None
+    
+    def save_seer_action(self, seer_id: str, action: Dict[str, Any]) -> bool:
+        """
+        保存预言家行动（私有数据）
+        
+        Args:
+            seer_id: 预言家的Agent ID
+            action: 预言家行动数据，包含验人选择、验人结果等
+            
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 构建预言家私有数据文件路径
+            seer_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / "seer.json"
+            
+            # 确保目录存在
+            os.makedirs(os.path.dirname(seer_file), exist_ok=True)
+            
+            # 保存数据
+            with open(seer_file, 'w', encoding='utf-8') as f:
+                json.dump(action, f, ensure_ascii=False, indent=2)
+            
+            # 更新最后修改时间
+            self._update_last_modified()
+            self.logger.debug(f"Saved seer action for {seer_id}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving seer action for {seer_id}: {e}")
+            return False
+    
+    def get_seer_action(self) -> Optional[Dict[str, Any]]:
+        """
+        获取预言家行动（私有数据）
+        
+        Returns:
+            预言家行动数据，如果不存在则返回None
+        """
+        # 构建预言家私有数据文件路径
+        seer_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / "seer.json"
+        
+        if not os.path.exists(seer_file):
+            return None
+        
+        try:
+            with open(seer_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            self.logger.error(f"Error loading seer action: {e}")
+            return None
+    
+    def save_werewolf_action(self, werewolf_id: str, action: Dict[str, Any]) -> bool:
+        """
+        保存狼人行动（私有数据）
+        
+        Args:
+            werewolf_id: 狼人的Agent ID
+            action: 狼人行动数据，包含刀人选择等
+            
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 构建狼人私有数据文件路径
+            werewolf_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / "werewolf.json"
+            
+            # 确保目录存在
+            os.makedirs(os.path.dirname(werewolf_file), exist_ok=True)
+            
+            # 保存数据
+            with open(werewolf_file, 'w', encoding='utf-8') as f:
+                json.dump(action, f, ensure_ascii=False, indent=2)
+            
+            # 更新最后修改时间
+            self._update_last_modified()
+            self.logger.debug(f"Saved werewolf action for {werewolf_id}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving werewolf action for {werewolf_id}: {e}")
+            return False
+    
+    def get_werewolf_action(self) -> Optional[Dict[str, Any]]:
+        """
+        获取狼人行动（私有数据）
+        
+        Returns:
+            狼人行动数据，如果不存在则返回None
+        """
+        # 构建狼人私有数据文件路径
+        werewolf_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / "werewolf.json"
+        
+        if not os.path.exists(werewolf_file):
+            return None
+        
+        try:
+            with open(werewolf_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            self.logger.error(f"Error loading werewolf action: {e}")
+            return None
+

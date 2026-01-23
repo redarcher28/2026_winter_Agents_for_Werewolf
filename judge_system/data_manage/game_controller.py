@@ -3,8 +3,8 @@ import os
 import uuid
 from typing import Dict, Any, List, Tuple, Optional
 from datetime import datetime
-from judge_system.manage import GameStorageManager
-from logging_config import game_logger
+from .manage import GameStorageManager
+from .logging_config import game_logger
 from interfaces import EventType
 
 # ==================== 核心数据存储管理接口 ====================
@@ -79,77 +79,3 @@ async def end_current_game(
         game_controller_logger.error(f"Error ending game {game_id}: {e}")
         return False
 
-async def save_game_snapshot(
-    game_id: str,                # 游戏ID
-    snapshot_name: str = "auto"  # 快照名称
-) -> Tuple[bool, str]:
-    """
-    保存游戏快照（核心数据备份逻辑）
-    """
-    try:
-        # 创建存储管理器
-        storage_manager = GameStorageManager(game_id=game_id)
-        
-        # 生成快照ID
-        snapshot_id = f"snap_{int(datetime.now().timestamp()*1000)}"
-        
-        # 获取当前游戏事件数据
-        current_events = storage_manager.get_public_events(limit=1000)
-        
-        # 构建快照元数据
-        snapshot_data = {
-            "snapshot_id": snapshot_id,
-            "snapshot_name": snapshot_name,
-            "game_id": game_id,
-            "timestamp": datetime.now().isoformat(),
-            "event_count": len(current_events)
-        }
-        
-        # 保存快照元数据（核心存储操作）
-        snapshot_dir = os.path.join(storage_manager.game_dir, "backups/")
-        os.makedirs(snapshot_dir, exist_ok=True)
-        snapshot_file = os.path.join(snapshot_dir, f"snapshot_{snapshot_id}.json")
-        with open(snapshot_file, 'w', encoding='utf-8') as f:
-            json.dump(snapshot_data, f, ensure_ascii=False, indent=2)
-        
-        # 保存游戏状态快照
-        state_snapshot = {
-            "snapshot_id": snapshot_id,
-            "public_events": current_events
-        }
-        state_file = os.path.join(snapshot_dir, f"state_{snapshot_id}.json")
-        with open(state_file, 'w', encoding='utf-8') as f:
-            json.dump(state_snapshot, f, ensure_ascii=False, indent=2)
-        
-        return True, snapshot_id
-        
-    except Exception as e:
-        print(f"Error saving game snapshot: {e}")
-        return False, ""
-
-async def load_game_snapshot(
-    game_id: str,      # 游戏ID
-    snapshot_id: str   # 快照ID
-) -> Tuple[bool, Dict[str, Any]]:
-    """
-    加载游戏快照（核心数据恢复逻辑）
-    """
-    try:
-        # 创建存储管理器
-        storage_manager = GameStorageManager(game_id=game_id)
-        
-        # 加载快照文件（核心读取操作）
-        state_file = os.path.join(storage_manager.game_dir, "backups", f"state_{snapshot_id}.json")
-        
-        if not os.path.exists(state_file):
-            return False, {"error": "Snapshot not found"}
-        
-        with open(state_file, 'r', encoding='utf-8') as f:
-            snapshot_data = json.load(f)
-        
-        # 返回快照数据
-        return True, snapshot_data
-        
-    except Exception as e:
-        print(f"Error loading game snapshot: {e}")
-        return False, {"error": str(e)}

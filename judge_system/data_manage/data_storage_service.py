@@ -7,9 +7,10 @@ import uuid
 from datetime import datetime
 from typing import Dict, Any, List, Tuple, Optional, Union
 
-from judge_system.manage import GameStorageManager
+from judge_system.data_manage.manage import GameStorageManager
+from judge_system.observer_interface import PlayerType, Role, PlayerStatus
 from interfaces import DataStorageInterface, DataBackupType, ExportFormat
-from logging_config import game_logger
+from judge_system.data_manage.logging_config import game_logger
 
 class DataStorageService(DataStorageInterface):
     """数据存储服务"""
@@ -342,7 +343,7 @@ class DataStorageService(DataStorageInterface):
             
             # 清理旧事件
             if clean_old_events:
-                events_file = f"{storage_manager.game_dir}public/events.jsonl"
+                events_file = f"{storage_manager.game_dir}logs/game_events.log"
                 if os.path.exists(events_file):
                     # 读取所有事件
                     events = []
@@ -361,11 +362,22 @@ class DataStorageService(DataStorageInterface):
                     kept_events = []
                     removed_events = 0
                     for event in events:
-                        event_time = datetime.fromisoformat(event["timestamp"]).timestamp()
-                        if event_time >= cutoff_time:
-                            kept_events.append(event)
+                        event_time = event.get("timestamp")
+                        if event_time:
+                            try:
+                                # 处理不同格式的时间戳
+                                if isinstance(event_time, str):
+                                    event_time = datetime.fromisoformat(event_time).timestamp()
+                                if event_time >= cutoff_time:
+                                    kept_events.append(event)
+                                else:
+                                    removed_events += 1
+                            except ValueError:
+                                # 如果时间戳格式无效，保留事件
+                                kept_events.append(event)
                         else:
-                            removed_events += 1
+                            # 如果没有时间戳，保留事件
+                            kept_events.append(event)
                     
                     # 保存过滤后的事件
                     if removed_events > 0:
@@ -707,3 +719,500 @@ class DataStorageService(DataStorageInterface):
         except Exception as e:
             self.logger.error(f"Unexpected error deleting data for game {game_id}: {e}")
             return False
+    
+    # ============ 玩家状态管理接口 ============
+    
+    def save_player_status(self, game_id: str, player_status: Dict[str, Any]) -> bool:
+        """
+        保存单个玩家的状态
+        
+        Args:
+            game_id: 游戏ID
+            player_status: 玩家状态数据
+            
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+            
+            # 保存玩家状态
+            result = storage_manager.save_player_status(player_status)
+            self.logger.debug(f"Saved player status for game {game_id}: {result}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error saving player status for game {game_id}: {e}")
+            return False
+    
+    def save_all_player_statuses(self, game_id: str, player_statuses: Dict[str, Dict[str, Any]]) -> bool:
+        """
+        保存所有玩家的状态
+        
+        Args:
+            game_id: 游戏ID
+            player_statuses: 玩家状态数据字典，键为玩家ID，值为玩家状态
+            
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+            
+            # 保存所有玩家状态
+            result = storage_manager.save_all_player_statuses(player_statuses)
+            self.logger.debug(f"Saved all player statuses for game {game_id}: {result}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error saving all player statuses for game {game_id}: {e}")
+            return False
+    
+    def load_player_status(self, game_id: str, player_id: str) -> Optional[Dict[str, Any]]:
+        """
+        加载玩家状态
+        
+        Args:
+            game_id: 游戏ID
+            player_id: 玩家ID
+            
+        Returns:
+            玩家状态数据，如果不存在则返回None
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+            
+            # 加载玩家状态
+            result = storage_manager.load_player_status(player_id)
+            self.logger.debug(f"Loaded player status for game {game_id}, player {player_id}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error loading player status for game {game_id}, player {player_id}: {e}")
+            return None
+    
+    def load_all_player_statuses(self, game_id: str) -> Dict[str, Dict[str, Any]]:
+        """
+        加载所有玩家的状态
+        
+        Args:
+            game_id: 游戏ID
+            
+        Returns:
+            玩家状态数据字典，键为玩家ID，值为玩家状态
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+            
+            # 加载所有玩家状态
+            result = storage_manager.load_all_player_statuses()
+            self.logger.debug(f"Loaded status for {len(result)} players in game {game_id}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error loading all player statuses for game {game_id}: {e}")
+            return {}
+    
+    def save_witch_action(self, game_id: str, witch_id: str, action: Dict[str, Any]) -> bool:
+        """
+        保存女巫行动（私有数据）
+        
+        Args:
+            game_id: 游戏ID
+            witch_id: 女巫的Agent ID
+            action: 女巫行动数据，包含是否使用解药、是否使用毒药、选择的目标等
+            
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+            
+            # 保存女巫行动
+            result = storage_manager.save_witch_action(witch_id, action)
+            self.logger.debug(f"Saved witch action for game {game_id}, witch {witch_id}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error saving witch action for game {game_id}, witch {witch_id}: {e}")
+            return False
+    
+    def get_witch_action(self, game_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取女巫行动（私有数据）
+        
+        Args:
+            game_id: 游戏ID
+            
+        Returns:
+            女巫行动数据，如果不存在则返回None
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+            
+            # 获取女巫行动
+            result = storage_manager.get_witch_action()
+            self.logger.debug(f"Got witch action for game {game_id}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error getting witch action for game {game_id}: {e}")
+            return None
+    
+    def save_seer_action(self, game_id: str, seer_id: str, action: Dict[str, Any]) -> bool:
+        """
+        保存预言家行动（私有数据）
+        
+        Args:
+            game_id: 游戏ID
+            seer_id: 预言家的Agent ID
+            action: 预言家行动数据，包含验人选择、验人结果等
+            
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+            
+            # 保存预言家行动
+            result = storage_manager.save_seer_action(seer_id, action)
+            self.logger.debug(f"Saved seer action for game {game_id}, seer {seer_id}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error saving seer action for game {game_id}, seer {seer_id}: {e}")
+            return False
+    
+    def get_seer_action(self, game_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取预言家行动（私有数据）
+        
+        Args:
+            game_id: 游戏ID
+            
+        Returns:
+            预言家行动数据，如果不存在则返回None
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+            
+            # 获取预言家行动
+            result = storage_manager.get_seer_action()
+            self.logger.debug(f"Got seer action for game {game_id}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error getting seer action for game {game_id}: {e}")
+            return None
+    
+    def save_werewolf_action(self, game_id: str, werewolf_id: str, action: Dict[str, Any]) -> bool:
+        """
+        保存狼人行动（私有数据）
+        
+        Args:
+            game_id: 游戏ID
+            werewolf_id: 狼人的Agent ID
+            action: 狼人行动数据，包含刀人选择等
+            
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+            
+            # 保存狼人行动
+            result = storage_manager.save_werewolf_action(werewolf_id, action)
+            self.logger.debug(f"Saved werewolf action for game {game_id}, werewolf {werewolf_id}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error saving werewolf action for game {game_id}, werewolf {werewolf_id}: {e}")
+            return False
+    
+    def get_werewolf_action(self, game_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取狼人行动（私有数据）
+        
+        Args:
+            game_id: 游戏ID
+            
+        Returns:
+            狼人行动数据，如果不存在则返回None
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+            
+            # 获取狼人行动
+            result = storage_manager.get_werewolf_action()
+            self.logger.debug(f"Got werewolf action for game {game_id}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error getting werewolf action for game {game_id}: {e}")
+            return None
+    
+    # ============ 业务逻辑层数据需求接口 ============
+    
+    def get_basic_env_data(self, game_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取基础环境数据（从 game_state.log 最后一行）
+        
+        Args:
+            game_id: 游戏ID
+            
+        Returns:
+            基础环境数据，如果不存在则返回None
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+            
+            # 读取 game_state.log 的最后一行
+            state_log_path = storage_manager.state_log_path
+            
+            if not os.path.exists(state_log_path):
+                return None
+            
+            # 读取所有行并获取最后一行
+            with open(state_log_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                if not lines:
+                    return None
+                
+                last_line = lines[-1].strip()
+                if not last_line:
+                    return None
+                
+                # 解析最后一行
+                game_state = json.loads(last_line)
+                
+                # 提取基础环境数据
+                basic_env = {
+                    "phase": game_state.get("phase", "UNKNOWN"),
+                    "day_number": game_state.get("day_number", 1),
+                    "alive_players": game_state.get("alive_players", [])
+                }
+                
+                self.logger.debug(f"Got basic env data for game {game_id}: {basic_env}")
+                return basic_env
+        except Exception as e:
+            self.logger.error(f"Error getting basic env data for game {game_id}: {e}")
+            return None
+    
+    def get_role_permissions(self, game_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取角色权限快照（从 private/roles/*.json）
+        
+        Args:
+            game_id: 游戏ID
+            
+        Returns:
+            角色权限快照，如果不存在则返回None
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+            
+            role_permissions = {
+                "werewolf": {
+                    "team_members": [],
+                    "has_acted": False
+                },
+                "witch": {
+                    "heal_used": False,
+                    "poison_used": False
+                },
+                "seer": {
+                    "has_inspected": False
+                }
+            }
+            
+            # 读取狼人数据
+            werewolf_data = storage_manager.get_role_specific_data("werewolf")
+            if werewolf_data:
+                role_permissions["werewolf"]["team_members"] = werewolf_data.get("team_members", [])
+                # 检查是否已行动
+                kill_targets = werewolf_data.get("kill_targets", [])
+                # 简单判断：如果有击杀目标记录，则认为已行动
+                role_permissions["werewolf"]["has_acted"] = len(kill_targets) > 0
+            
+            # 读取女巫数据
+            witch_data = storage_manager.get_role_specific_data("witch")
+            if witch_data:
+                role_permissions["witch"]["heal_used"] = witch_data.get("heal_used", False)
+                role_permissions["witch"]["poison_used"] = witch_data.get("poison_used", False)
+            
+            # 读取预言家数据
+            seer_data = storage_manager.get_role_specific_data("seer")
+            if seer_data:
+                inspections = seer_data.get("inspections", [])
+                # 简单判断：如果有验人记录，则认为已行动
+                role_permissions["seer"]["has_inspected"] = len(inspections) > 0
+            
+            self.logger.debug(f"Got role permissions for game {game_id}")
+            return role_permissions
+        except Exception as e:
+            self.logger.error(f"Error getting role permissions for game {game_id}: {e}")
+            return None
+    
+    def get_role_identities(self, game_id: str) -> Optional[Dict[str, str]]:
+        """
+        获取角色真实身份表（从 private/roles/ 下的所有文件）
+        
+        Args:
+            game_id: 游戏ID
+            
+        Returns:
+            角色真实身份表，如果不存在则返回None
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+            
+            role_identities = {}
+            
+            # 构建角色数据目录路径
+            roles_dir = os.path.join(storage_manager.game_dir, "private", "roles")
+            
+            if not os.path.exists(roles_dir):
+                return role_identities
+            
+            # 读取所有角色文件
+            for filename in os.listdir(roles_dir):
+                if filename.endswith(".json") and filename != "wolf_communication.log":
+                    role = filename[:-5]  # 移除 .json 后缀
+                    role_data = storage_manager.get_role_specific_data(role)
+                    
+                    if role_data:
+                        # 处理不同角色的数据结构
+                        if role == "werewolf":
+                            # 从狼队成员中提取身份
+                            team_members = role_data.get("team_members", [])
+                            for member in team_members:
+                                if isinstance(member, dict):
+                                    player_id = member.get("player_id")
+                                    if player_id:
+                                        role_identities[player_id] = "WEREWOLF"
+                        elif role == "witch":
+                            # 女巫数据中可能直接包含女巫ID
+                            witch_id = role_data.get("witch_id") or role_data.get("player_id")
+                            if witch_id:
+                                role_identities[witch_id] = "WITCH"
+                        elif role == "seer":
+                            # 预言家数据中可能直接包含预言家ID
+                            seer_id = role_data.get("seer_id") or role_data.get("player_id")
+                            if seer_id:
+                                role_identities[seer_id] = "SEER"
+            
+            self.logger.debug(f"Got role identities for game {game_id}: {role_identities}")
+            return role_identities
+        except Exception as e:
+            self.logger.error(f"Error getting role identities for game {game_id}: {e}")
+            return None
+    
+    def get_vote_data(self, game_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取决策依据/票池（从 vote_result.log 最后一行）
+        
+        Args:
+            game_id: 游戏ID
+            
+        Returns:
+            决策依据/票池，如果不存在则返回None
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+            
+            # 读取 vote_result.log 的最后一行
+            vote_log_path = storage_manager.vote_log_path
+            
+            if not os.path.exists(vote_log_path):
+                return {
+                    "votes": {},
+                    "result": None
+                }
+            
+            # 读取所有行并获取最后一行
+            with open(vote_log_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                if not lines:
+                    return {
+                        "votes": {},
+                        "result": None
+                    }
+                
+                last_line = lines[-1].strip()
+                if not last_line:
+                    return {
+                        "votes": {},
+                        "result": None
+                    }
+                
+                # 解析最后一行
+                vote_data = json.loads(last_line)
+                
+                # 提取投票数据
+                vote_info = {
+                    "votes": vote_data.get("votes", {}),
+                    "result": vote_data.get("result", None)
+                }
+                
+                self.logger.debug(f"Got vote data for game {game_id}: {vote_info}")
+                return vote_info
+        except Exception as e:
+            self.logger.error(f"Error getting vote data for game {game_id}: {e}")
+            return {
+                "votes": {},
+                "result": None
+            }
+    
+    def get_business_data(self, game_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取业务逻辑层所需的完整数据
+        
+        Args:
+            game_id: 游戏ID
+            
+        Returns:
+            业务逻辑层所需的完整数据，如果不存在则返回None
+        """
+        try:
+            # 获取所有业务数据
+            basic_env = self.get_basic_env_data(game_id)
+            role_permissions = self.get_role_permissions(game_id)
+            role_identities = self.get_role_identities(game_id)
+            vote_data = self.get_vote_data(game_id)
+            
+            # 构建完整的业务数据
+            business_data = {
+                "basic_env": basic_env or {
+                    "phase": "UNKNOWN",
+                    "day_number": 1,
+                    "alive_players": []
+                },
+                "role_permissions": role_permissions or {
+                    "werewolf": {
+                        "team_members": [],
+                        "has_acted": False
+                    },
+                    "witch": {
+                        "heal_used": False,
+                        "poison_used": False
+                    },
+                    "seer": {
+                        "has_inspected": False
+                    }
+                },
+                "role_identities": role_identities or {},
+                "vote_data": vote_data or {
+                    "votes": {},
+                    "result": None
+                }
+            }
+            
+            self.logger.debug(f"Got business data for game {game_id}")
+            return business_data
+        except Exception as e:
+            self.logger.error(f"Error getting business data for game {game_id}: {e}")
+            return None
