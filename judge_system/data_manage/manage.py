@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 import os
 import json
@@ -11,13 +12,14 @@ from pathlib import Path
 from interfaces import GameStorageInterface, EventType, GamePhase, StorageDirectoryType
 from judge_system.data_manage.logging_config import game_logger
 
+
 class GameStorageManager(GameStorageInterface):
     """游戏数据存储管理器"""
-    
+
     def __init__(self, game_id: str, base_dir: str = "./game_data"):
         """
         初始化存储管理器
-        
+
         Args:
             game_id: 游戏ID
             base_dir: 基础存储目录
@@ -25,13 +27,13 @@ class GameStorageManager(GameStorageInterface):
         self.game_id = game_id
         self.base_dir = base_dir
         self.game_dir = f"{base_dir}/game_{game_id}/"
-        
+
         # 转换为Path对象以便使用pathlib语法
         self.game_dir_path = Path(self.game_dir)
-        
+
         # 日志文件路径设置
         self.log_dir = self.game_dir_path / StorageDirectoryType.LOGS.value
-        
+
         # 具体日志文件路径
         self.game_log_path = self.log_dir / "game_events.log"
         self.speech_log_path = self.log_dir / "public_speech.log"
@@ -39,20 +41,20 @@ class GameStorageManager(GameStorageInterface):
         self.state_log_path = self.log_dir / "game_state.log"
         # 狼人通信日志移动到私有目录
         self.wolf_log_path = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / "wolf_communication.log"
-        
+
         # 公共事件日志现在直接使用game_events.log，不再单独存储
-        
+
         self._game_metadata = None
-        
+
         # 初始化日志器
         self.logger = game_logger.get_game_logger(game_id, "storage")
-        
+
         # 创建目录结构
         self._ensure_directories()
-        
+
         # 初始化游戏元数据
         self._init_game_metadata()
-    
+
     def _init_game_metadata(self):
         """初始化游戏元数据"""
         # 使用pathlib构建元数据文件路径
@@ -68,7 +70,8 @@ class GameStorageManager(GameStorageInterface):
         else:
             with open(metadata_file, "r", encoding="utf-8") as f:
                 self._game_metadata = json.load(f)
-    
+
+    # route C-1: 确保目录结构存在（被所有存储操作调用）
     def _ensure_directories(self):
         """确保所有必要的目录都存在"""
         # 使用pathlib构建所有必要的目录路径
@@ -82,10 +85,10 @@ class GameStorageManager(GameStorageInterface):
             self.game_dir_path / StorageDirectoryType.PRIVATE.value,  # 私有数据目录
             self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles",  # 角色特定数据目录
         ]
-        
+
         for directory in directories:
             os.makedirs(directory, exist_ok=True)
-    
+
     def _save_metadata(self):
         """保存游戏元数据"""
         if self._game_metadata:
@@ -97,22 +100,22 @@ class GameStorageManager(GameStorageInterface):
                 self.logger.debug(f"Game metadata saved for game {self.game_id}")
             except Exception as e:
                 self.logger.error(f"Error saving game metadata for game {self.game_id}: {e}")
-    
+
     def _update_last_modified(self):
         """更新最后修改时间"""
         if self._game_metadata:
             self._game_metadata["last_modified"] = datetime.now().isoformat()
             self._save_metadata()
-    
+
     # ============ 公共数据存储 ============
-    
+
     def save_public_event(self, event_data: Dict[str, Any]) -> bool:
         """
         保存公共事件（法官发言、遗言等）
-        
+
         Args:
             event_data: 事件数据
-            
+
         Returns:
             保存是否成功
         """
@@ -123,10 +126,10 @@ class GameStorageManager(GameStorageInterface):
                 event["event_id"] = f"evt_{uuid.uuid4().hex[:8]}"
             if "timestamp" not in event:
                 event["timestamp"] = datetime.now().isoformat()
-            
+
             # 直接保存到game_events.log，不再单独存储公共事件日志
             self.save_game_event(event)
-            
+
             # 更新最后修改时间
             self._update_last_modified()
             self.logger.debug(f"Saved public event: {event.get('event_type')}")
@@ -134,24 +137,24 @@ class GameStorageManager(GameStorageInterface):
         except Exception as e:
             self.logger.error(f"Error saving public event: {e}")
             return False
-    
-    def get_public_events(self, event_type: Optional[str] = None, 
-                         limit: int = 100) -> List[Dict[str, Any]]:
+
+    def get_public_events(self, event_type: Optional[str] = None,
+                          limit: int = 100) -> List[Dict[str, Any]]:
         """
         获取公共事件
-        
+
         Args:
             event_type: 过滤事件类型
             limit: 返回的最大事件数
-            
+
         Returns:
             事件列表
         """
         events = []
-        
+
         if not os.path.exists(self.game_log_path):
             return []
-        
+
         try:
             with open(self.game_log_path, 'r', encoding='utf-8') as f:
                 # 读取最后limit行
@@ -170,16 +173,16 @@ class GameStorageManager(GameStorageInterface):
                         continue
         except Exception as e:
             self.logger.error(f"Error reading public events: {e}")
-        
+
         return events
-    
+
     def save_game_event(self, event_data: Dict[str, Any]) -> bool:
         """
         保存游戏事件到game_events.log
-        
+
         Args:
             event_data: 游戏事件数据
-            
+
         Returns:
             保存是否成功
         """
@@ -194,23 +197,23 @@ class GameStorageManager(GameStorageInterface):
                 "timestamp": event_data.get("timestamp", datetime.now().timestamp()),
                 "metadata": event_data.get("metadata", {})
             }
-            
+
             with open(self.game_log_path, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(event, ensure_ascii=False) + '\n')
-            
+
             self._update_last_modified()
             return True
         except Exception as e:
             self.logger.error(f"Error saving game event: {e}")
             return False
-    
+
     def save_speech(self, speech_data: Dict[str, Any]) -> bool:
         """
         保存发言记录到public_speech.log
-        
+
         Args:
             speech_data: 发言数据
-            
+
         Returns:
             保存是否成功
         """
@@ -226,23 +229,23 @@ class GameStorageManager(GameStorageInterface):
                 "confidence": speech_data.get("confidence", 1.0),
                 "keywords": speech_data.get("keywords", [])
             }
-            
+
             with open(self.speech_log_path, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(speech, ensure_ascii=False) + '\n')
-            
+
             self._update_last_modified()
             return True
         except Exception as e:
             self.logger.error(f"Error saving speech: {e}")
             return False
-    
+
     def save_vote(self, vote_data: Dict[str, Any]) -> bool:
         """
         保存投票结果到vote_result.log
-        
+
         Args:
             vote_data: 投票数据
-            
+
         Returns:
             保存是否成功
         """
@@ -256,30 +259,30 @@ class GameStorageManager(GameStorageInterface):
                 "result": vote_data.get("result"),
                 "timestamp": vote_data.get("timestamp", datetime.now().timestamp())
             }
-            
+
             with open(self.vote_log_path, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(vote, ensure_ascii=False) + '\n')
-            
+
             self._update_last_modified()
             return True
         except Exception as e:
             self.logger.error(f"Error saving vote: {e}")
             return False
-    
+
     def save_game_state(self, state_data: Dict[str, Any]) -> bool:
         """
         保存游戏状态到game_state.log
-        
+
         Args:
             state_data: 游戏状态数据
-            
+
         Returns:
             保存是否成功
         """
         try:
             # 确保状态数据包含必要字段
             phase_value = state_data.get("phase", "UNKNOWN")
-            
+
             # 验证phase值是否有效
             if phase_value != "UNKNOWN":
                 try:
@@ -289,7 +292,7 @@ class GameStorageManager(GameStorageInterface):
                 except ValueError:
                     # 如果无效，使用默认值
                     phase_value = GamePhase.DAY.value
-            
+
             game_state = {
                 "game_id": state_data.get("game_id", self.game_id),
                 "phase": phase_value,
@@ -301,23 +304,23 @@ class GameStorageManager(GameStorageInterface):
                 "vote_results": state_data.get("vote_results"),
                 "last_night_actions": state_data.get("last_night_actions")
             }
-            
+
             with open(self.state_log_path, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(game_state, ensure_ascii=False) + '\n')
-            
+
             self._update_last_modified()
             return True
         except Exception as e:
             self.logger.error(f"Error saving game state: {e}")
             return False
-    
+
     def save_wolf_communication(self, communication_data: Dict[str, Any]) -> bool:
         """
         保存狼人通信到wolf_communication.log
-        
+
         Args:
             communication_data: 狼人通信数据
-            
+
         Returns:
             保存是否成功
         """
@@ -330,10 +333,10 @@ class GameStorageManager(GameStorageInterface):
                 "timestamp": communication_data.get("timestamp", datetime.now().timestamp()),
                 "metadata": communication_data.get("metadata", {})
             }
-            
+
             with open(self.wolf_log_path, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(communication, ensure_ascii=False) + '\n')
-            
+
             self._update_last_modified()
             return True
         except Exception as e:
@@ -341,15 +344,15 @@ class GameStorageManager(GameStorageInterface):
             return False
 
     # ============ Agent私有数据存储 ============
-    
+
     def save_agent_memory(self, agent_id: str, memory_data: Dict[str, Any]) -> bool:
         """
         保存Agent记忆
-        
+
         Args:
             agent_id: Agent ID
             memory_data: 记忆数据
-            
+
         Returns:
             保存是否成功
         """
@@ -358,10 +361,10 @@ class GameStorageManager(GameStorageInterface):
             agent_dir_path = self.game_dir_path / StorageDirectoryType.AGENTS.value / agent_id
             agent_dir = str(agent_dir_path)
             os.makedirs(agent_dir, exist_ok=True)
-            
+
             # 使用pathlib构建记忆文件路径
             memory_file = agent_dir_path / "memory.json"
-            
+
             # 确保记忆数据有基本结构
             if "entries" not in memory_data:
                 memory_data["entries"] = []
@@ -369,14 +372,14 @@ class GameStorageManager(GameStorageInterface):
                 memory_data["last_updated"] = datetime.now().isoformat()
             else:
                 memory_data["last_updated"] = datetime.now().isoformat()
-            
+
             # 创建备份（保留最后5个版本）
             self._backup_file(memory_file, max_backups=5)
-            
+
             # 保存记忆
             with open(memory_file, 'w', encoding='utf-8') as f:
                 json.dump(memory_data, f, ensure_ascii=False, indent=2)
-            
+
             # 更新最后修改时间
             self._update_last_modified()
             self.logger.debug(f"Saved agent memory for {agent_id}")
@@ -384,58 +387,58 @@ class GameStorageManager(GameStorageInterface):
         except Exception as e:
             self.logger.error(f"Error saving agent memory for {agent_id}: {e}")
             return False
-    
+
     def load_agent_memory(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """
         加载Agent记忆
-        
+
         Args:
             agent_id: Agent ID
-            
+
         Returns:
             记忆数据，如果不存在则返回None
         """
         # 使用pathlib构建记忆文件路径
         memory_file = self.game_dir_path / StorageDirectoryType.AGENTS.value / agent_id / "memory.json"
-        
+
         if not os.path.exists(memory_file):
             return None
-        
+
         try:
             with open(memory_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
             self.logger.error(f"Error loading agent memory: {e}")
             return None
-    
+
     def append_agent_memory(self, agent_id: str, memory_item: Dict[str, Any]) -> bool:
         """
         追加智能体记忆
-        
+
         Args:
             agent_id: 智能体ID
             memory_item: 记忆项
-            
+
         Returns:
             追加是否成功
         """
         try:
             # 加载现有记忆
             existing_memory = self.load_agent_memory(agent_id)
-            
+
             if existing_memory:
                 # 确保entries字段存在
                 if "entries" not in existing_memory:
                     existing_memory["entries"] = []
-                
+
                 # 确保记忆项有时间戳
                 if "timestamp" not in memory_item:
                     memory_item["timestamp"] = datetime.now().isoformat()
-                
+
                 # 追加记忆项
                 existing_memory["entries"].append(memory_item)
                 existing_memory["last_updated"] = datetime.now().isoformat()
-                
+
                 # 保存更新后的记忆
                 return self.save_agent_memory(agent_id, existing_memory)
             else:
@@ -446,16 +449,16 @@ class GameStorageManager(GameStorageInterface):
                 }
                 if "timestamp" not in memory_item:
                     memory_item["timestamp"] = datetime.now().isoformat()
-                
+
                 return self.save_agent_memory(agent_id, new_memory)
         except Exception as e:
             self.logger.error(f"Error appending agent memory for {agent_id}: {e}")
             return False
-    
+
     def save_agent_metrics(self, agent_id: str, metrics: Dict[str, Any]):
         """
         保存Agent性能指标
-        
+
         Args:
             agent_id: Agent ID
             metrics: 指标数据
@@ -463,48 +466,48 @@ class GameStorageManager(GameStorageInterface):
         # 使用pathlib构建agent目录和指标文件路径
         agent_dir_path = self.game_dir_path / StorageDirectoryType.AGENTS.value / agent_id
         os.makedirs(agent_dir_path, exist_ok=True)
-        
+
         # 确保指标有时间戳
         if "timestamp" not in metrics:
             metrics["timestamp"] = datetime.now().isoformat()
         if "agent_id" not in metrics:
             metrics["agent_id"] = agent_id
-        
+
         metrics_file = agent_dir_path / "metrics.jsonl"
-        
+
         with open(metrics_file, 'a', encoding='utf-8') as f:
             f.write(json.dumps(metrics, ensure_ascii=False) + '\n')
-        
+
         # 更新最后修改时间
         self._update_last_modified()
-    
-    def get_agent_metrics(self, agent_id: str, 
-                         start_time: Optional[str] = None,
-                         end_time: Optional[str] = None) -> List[Dict]:
+
+    def get_agent_metrics(self, agent_id: str,
+                          start_time: Optional[str] = None,
+                          end_time: Optional[str] = None) -> List[Dict]:
         """
         获取Agent性能指标
-        
+
         Args:
             agent_id: Agent ID
             start_time: 开始时间（ISO格式）
             end_time: 结束时间（ISO格式）
-            
+
         Returns:
             指标列表
         """
         # 使用pathlib构建指标文件路径
         metrics_file = self.game_dir_path / StorageDirectoryType.AGENTS.value / agent_id / "metrics.jsonl"
-        
+
         if not os.path.exists(metrics_file):
             return []
-        
+
         metrics = []
         try:
             with open(metrics_file, 'r', encoding='utf-8') as f:
                 for line in f:
                     try:
                         metric = json.loads(line.strip())
-                        
+
                         # 时间过滤
                         timestamp = metric.get("timestamp")
                         if timestamp:
@@ -512,52 +515,52 @@ class GameStorageManager(GameStorageInterface):
                                 continue
                             if end_time and timestamp > end_time:
                                 continue
-                        
+
                         metrics.append(metric)
                     except json.JSONDecodeError:
                         continue
         except Exception as e:
             self.logger.error(f"Error reading agent metrics: {e}")
-        
+
         return metrics
 
     # ============ 实用方法 ============
-    
+
     def _backup_file(self, filepath: str, max_backups: int = 5):
         """
         备份文件
-        
+
         Args:
             filepath: 文件路径
             max_backups: 最大备份数量
         """
         if not os.path.exists(filepath):
             return
-        
+
         # 创建备份目录
         backup_dir = f"{self.game_dir}{StorageDirectoryType.BACKUPS.value}/"
         os.makedirs(backup_dir, exist_ok=True)
-        
+
         # 生成备份文件名
         filename = os.path.basename(filepath)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # 包含毫秒
         backup_file = f"{backup_dir}/{filename}.{timestamp}.bak"
-        
+
         try:
             # 复制文件
             shutil.copy2(filepath, backup_file)
-            
+
             # 清理旧备份
             self._cleanup_old_backups(backup_dir, filename, max_backups)
         except Exception as e:
             self.logger.error(f"Error backing up file {filepath}: {e}")
-    
-    def _cleanup_old_backups(self, backup_dir: str, 
-                            filename_prefix: str, 
-                            max_backups: int):
+
+    def _cleanup_old_backups(self, backup_dir: str,
+                             filename_prefix: str,
+                             max_backups: int):
         """
         清理旧备份
-        
+
         Args:
             backup_dir: 备份目录
             filename_prefix: 文件名前缀
@@ -565,7 +568,7 @@ class GameStorageManager(GameStorageInterface):
         """
         if not os.path.exists(backup_dir):
             return
-            
+
         try:
             # 获取所有匹配的备份文件
             backup_files = []
@@ -574,10 +577,10 @@ class GameStorageManager(GameStorageInterface):
                     filepath = os.path.join(backup_dir, file)
                     if os.path.isfile(filepath):
                         backup_files.append((filepath, os.path.getmtime(filepath)))
-            
+
             # 按修改时间排序（旧的在前面）
             backup_files.sort(key=lambda x: x[1])
-            
+
             # 删除多余的备份
             deleted_count = 0
             while len(backup_files) > max_backups:
@@ -587,17 +590,18 @@ class GameStorageManager(GameStorageInterface):
                     deleted_count += 1
                 except Exception as delete_e:
                     self.logger.error(f"Error deleting old backup {old_file}: {delete_e}")
-            
+
             if deleted_count > 0:
                 pass  # 可以添加日志记录
-                        
+
         except Exception as e:
             self.logger.error(f"Error cleaning up backups in {backup_dir}: {e}")
-    
+
+    # route 6-3: 获取存储摘要（被DataStorageService.get_data_statistics调用）
     def get_storage_summary(self) -> Dict[str, Any]:
         """
         获取存储摘要
-        
+
         Returns:
             存储统计信息
         """
@@ -612,54 +616,54 @@ class GameStorageManager(GameStorageInterface):
             "last_modified": self._game_metadata.get("last_modified") if self._game_metadata else None,
             "metadata": self._game_metadata.copy() if self._game_metadata else None
         }
-        
+
         try:
             # 计算总大小和文件/目录数量
             total_size = 0
             file_counts = {}
             directory_counts = {}
-            
+
             for dirpath, dirnames, filenames in os.walk(self.game_dir):
                 # 计算当前目录的文件数量
                 dir_name = os.path.basename(dirpath)
                 if dir_name in [d.value for d in StorageDirectoryType]:
                     file_counts[dir_name] = len(filenames)
                     directory_counts[dir_name] = len(dirnames)
-                
+
                 # 累加文件大小
                 for filename in filenames:
                     filepath = os.path.join(dirpath, filename)
                     total_size += os.path.getsize(filepath)
-            
+
             summary["total_size"] = total_size
             summary["total_size_mb"] = total_size / (1024 * 1024)
             summary["file_counts"] = file_counts
             summary["directory_counts"] = directory_counts
-            
+
             # 添加事件数量
             summary["public_events_count"] = len(self.get_public_events(limit=10000))
-            
+
         except Exception as e:
             summary["error"] = str(e)
-        
+
         return summary
-    
+
     def get_game_metadata(self) -> Optional[Dict[str, Any]]:
         """
         获取游戏元数据
-        
+
         Returns:
             游戏元数据，如果不存在则返回None
         """
         return self._game_metadata.copy() if self._game_metadata else None
-    
+
     def update_game_metadata(self, metadata_updates: Dict[str, Any]) -> bool:
         """
         更新游戏元数据
-        
+
         Args:
             metadata_updates: 要更新的元数据字段
-            
+
         Returns:
             更新是否成功
         """
@@ -673,29 +677,29 @@ class GameStorageManager(GameStorageInterface):
         except Exception as e:
             self.logger.error(f"Error updating game metadata: {e}")
             return False
-    
+
     def save_role_specific_data(self, role: str, data: Dict[str, Any]) -> bool:
         """
         保存角色特定数据
-        
+
         Args:
             role: 角色类型
             data: 角色特定数据
-            
+
         Returns:
             保存是否成功
         """
         try:
             # 构建角色数据文件路径
             role_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / f"{role}.json"
-            
+
             # 确保目录存在
             os.makedirs(os.path.dirname(role_file), exist_ok=True)
-            
+
             # 保存数据
             with open(role_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            
+
             # 更新最后修改时间
             self._update_last_modified()
             self.logger.debug(f"Saved role specific data for {role}")
@@ -703,52 +707,53 @@ class GameStorageManager(GameStorageInterface):
         except Exception as e:
             self.logger.error(f"Error saving role specific data for {role}: {e}")
             return False
-    
+
     def get_role_specific_data(self, role: str) -> Optional[Dict[str, Any]]:
         """
         获取角色特定数据
-        
+
         Args:
             role: 角色类型
-            
+
         Returns:
             角色特定数据，如果不存在则返回None
         """
         # 构建角色数据文件路径
         role_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / f"{role}.json"
-        
+
         if not os.path.exists(role_file):
             return None
-        
+
         try:
             with open(role_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
             self.logger.error(f"Error loading role specific data for {role}: {e}")
             return None
-    
+
+    # route 4-3: 保存女巫行动（被DataStorageService.save_witch_action调用）
     def save_witch_action(self, witch_id: str, action: Dict[str, Any]) -> bool:
         """
         保存女巫行动（私有数据）
-        
+
         Args:
             witch_id: 女巫的Agent ID
             action: 女巫行动数据，包含是否使用解药、是否使用毒药、选择的目标等
-            
+
         Returns:
             保存是否成功
         """
         try:
             # 构建女巫私有数据文件路径
             witch_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / "witch.json"
-            
+
             # 确保目录存在
             os.makedirs(os.path.dirname(witch_file), exist_ok=True)
-            
+
             # 保存数据
             with open(witch_file, 'w', encoding='utf-8') as f:
                 json.dump(action, f, ensure_ascii=False, indent=2)
-            
+
             # 更新最后修改时间
             self._update_last_modified()
             self.logger.debug(f"Saved witch action for {witch_id}")
@@ -756,49 +761,49 @@ class GameStorageManager(GameStorageInterface):
         except Exception as e:
             self.logger.error(f"Error saving witch action for {witch_id}: {e}")
             return False
-    
+
     def get_witch_action(self) -> Optional[Dict[str, Any]]:
         """
         获取女巫行动（私有数据）
-        
+
         Returns:
             女巫行动数据，如果不存在则返回None
         """
         # 构建女巫私有数据文件路径
         witch_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / "witch.json"
-        
+
         if not os.path.exists(witch_file):
             return None
-        
+
         try:
             with open(witch_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
             self.logger.error(f"Error loading witch action: {e}")
             return None
-    
+
     def save_seer_action(self, seer_id: str, action: Dict[str, Any]) -> bool:
         """
         保存预言家行动（私有数据）
-        
+
         Args:
             seer_id: 预言家的Agent ID
             action: 预言家行动数据，包含验人选择、验人结果等
-            
+
         Returns:
             保存是否成功
         """
         try:
             # 构建预言家私有数据文件路径
             seer_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / "seer.json"
-            
+
             # 确保目录存在
             os.makedirs(os.path.dirname(seer_file), exist_ok=True)
-            
+
             # 保存数据
             with open(seer_file, 'w', encoding='utf-8') as f:
                 json.dump(action, f, ensure_ascii=False, indent=2)
-            
+
             # 更新最后修改时间
             self._update_last_modified()
             self.logger.debug(f"Saved seer action for {seer_id}")
@@ -806,49 +811,49 @@ class GameStorageManager(GameStorageInterface):
         except Exception as e:
             self.logger.error(f"Error saving seer action for {seer_id}: {e}")
             return False
-    
+
     def get_seer_action(self) -> Optional[Dict[str, Any]]:
         """
         获取预言家行动（私有数据）
-        
+
         Returns:
             预言家行动数据，如果不存在则返回None
         """
         # 构建预言家私有数据文件路径
         seer_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / "seer.json"
-        
+
         if not os.path.exists(seer_file):
             return None
-        
+
         try:
             with open(seer_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
             self.logger.error(f"Error loading seer action: {e}")
             return None
-    
+
     def save_werewolf_action(self, werewolf_id: str, action: Dict[str, Any]) -> bool:
         """
         保存狼人行动（私有数据）
-        
+
         Args:
             werewolf_id: 狼人的Agent ID
             action: 狼人行动数据，包含刀人选择等
-            
+
         Returns:
             保存是否成功
         """
         try:
             # 构建狼人私有数据文件路径
             werewolf_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / "werewolf.json"
-            
+
             # 确保目录存在
             os.makedirs(os.path.dirname(werewolf_file), exist_ok=True)
-            
+
             # 保存数据
             with open(werewolf_file, 'w', encoding='utf-8') as f:
                 json.dump(action, f, ensure_ascii=False, indent=2)
-            
+
             # 更新最后修改时间
             self._update_last_modified()
             self.logger.debug(f"Saved werewolf action for {werewolf_id}")
@@ -856,20 +861,20 @@ class GameStorageManager(GameStorageInterface):
         except Exception as e:
             self.logger.error(f"Error saving werewolf action for {werewolf_id}: {e}")
             return False
-    
+
     def get_werewolf_action(self) -> Optional[Dict[str, Any]]:
         """
         获取狼人行动（私有数据）
-        
+
         Returns:
             狼人行动数据，如果不存在则返回None
         """
         # 构建狼人私有数据文件路径
         werewolf_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "roles" / "werewolf.json"
-        
+
         if not os.path.exists(werewolf_file):
             return None
-        
+
         try:
             with open(werewolf_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
