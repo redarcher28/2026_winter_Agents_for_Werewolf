@@ -6,89 +6,45 @@ from datetime import datetime
 import uuid
 import types
 from enum import Enum
+from typing import Dict, Any, Optional
+import json
+from abc import ABC, abstractmethod
 
 
-# ===== 模拟依赖模块 =====
-# 首先创建模拟的interfaces模块
-# todo: 将模拟的类替换为实体类
-# question: 数据存储界面类是你负责还是蔡书灏负责？
-class MockDataStorageInterface:
-    pass
-
-# 数据备份类型
-class MockDataBackupType(Enum):
-    FULL = "full"
-
-# 导出格式类型
-class MockExportFormat(Enum):
-    ZIP = "zip"
-
-# question：游戏存储界面是谁负责？
-class MockGameStorageInterface:
-    pass
-
-# 事件类型
-# todo: 与蔡书灏对接①
-class MockEventType(Enum):
-    UNKNOWN = "unknown"
-
-# todo: 与蔡书灏对接②
-class MockGamePhase(Enum):
-    DAY = "day"
-    NIGHT = "night"
-
-# 存储目录类型
-class MockStorageDirectoryType(Enum):
-    LOGS = "logs"
-    AGENTS = "agents"
-    BACKUPS = "backups"
-    CONFIG = "config"
-    PRIVATE = "private"
+# ===== IDataManager 抽象基类 =====
+class IDataManager(ABC):
+    @abstractmethod
+    async def save_game_state(self, game_id: str, state: Dict[str, Any]) -> bool:
+        pass
+    
+    @abstractmethod
+    async def load_game_state(self, game_id: str) -> Optional[Dict[str, Any]]:
+        pass
 
 
-# 模拟observer_interface模块
-# todo: 与蔡书灏对接③
-class MockPlayerType:
-    pass
+# ===== 导入实际依赖模块 =====
+# 添加项目根目录到Python路径
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, project_root)
 
-# todo： 与蔡书灏对接④
-class MockRole:
-    pass
+# 导入实际的interfaces模块
+from judge_system.data_manage.datamanage_interface import (
+    DataStorageInterface,
+    DataBackupType,
+    ExportFormat,
+    GameStorageInterface,
+    EventType,
+    GamePhase,
+    StorageDirectoryType
+)
 
-# todo： 与蔡书灏对接⑤
-class MockPlayerStatus:
-    pass
+# 导入实际的observer_interface模块
+from judge_system.observer_interface import (
+    PlayerType,
+    Role,
+    PlayerStatus
+)
 
-
-def create_mock_interfaces():
-    """创建模拟的interfaces模块"""
-    module = types.ModuleType('interfaces')
-    module.__package__ = 'interfaces'
-
-    # 添加模拟类
-    module.DataStorageInterface = MockDataStorageInterface
-    module.DataBackupType = MockDataBackupType
-    module.ExportFormat = MockExportFormat
-    module.GameStorageInterface = MockGameStorageInterface
-    module.EventType = MockEventType
-    module.GamePhase = MockGamePhase
-    module.StorageDirectoryType = MockStorageDirectoryType
-
-    return module
-
-# 注册模块
-sys.modules['interfaces'] = create_mock_interfaces()
-
-
-# 模拟judge_system.observer_interface模块
-class MockObserverModule:
-    PlayerType = MockPlayerType
-    Role = MockRole
-    PlayerStatus = MockPlayerStatus
-
-
-# route 0-2: 注册observer接口模拟
-sys.modules['judge_system.observer_interface'] = MockObserverModule
 
 # ===== 现在可以导入原始模块 =====
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
@@ -97,51 +53,81 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 from judge_system.data_manage.manage import GameStorageManager
 
 
-# 扩展GameStorageManager类，添加缺失的方法
-# route 0-4: 扩展GameStorageManager以添加缺失功能
-# todo: 将扩展的功能添加到GameStorageManager中进行完善
-class ExtendedGameStorageManager(GameStorageManager):
-    def __init__(self, game_id, base_dir):
-        super().__init__(game_id, base_dir)
-        self._player_statuses = {}
-
-    def save_player_status(self, player_status):
-        """
-        保存玩家状态
-        """
-        player_id = player_status.get('player_id')
-        if player_id:
-            self._player_statuses[player_id] = player_status
-            return True
-        return False
-
-    def load_player_status(self, player_id):
-        """
-        加载玩家状态
-        """
-        return self._player_statuses.get(player_id)
-
-    def save_all_player_statuses(self, player_statuses):
-        """
-        保存所有玩家状态
-        """
-        self._player_statuses.update(player_statuses)
-        return True
-
-    def load_all_player_statuses(self):
-        """
-        加载所有玩家状态
-        """
-        return self._player_statuses
-
-
-# 替换原始的GameStorageManager
-import judge_system.data_manage.manage
-# fixme: 直接将原类替换的行为很危险，请将上面的扩展添加到manage中，并删除下面的冗余替换
-judge_system.data_manage.manage.GameStorageManager = ExtendedGameStorageManager
+# 现在GameStorageManager已经包含了所有必要的方法，不需要扩展
 
 # route 0-5: 导入DataStorageService类
 from judge_system.data_manage.data_storage_service import DataStorageService
+
+
+# ===== DataManager 类实现 =====
+# route 12: 实现DataManager类，继承自IDataManager接口
+class DataManager(IDataManager):
+    """
+    数据管理类，实现IDataManager接口
+    使用DataStorageService来管理游戏状态的保存和加载
+    """
+    
+    def __init__(self, base_data_dir: str = "./game_data"):
+        """
+        初始化DataManager
+        
+        Args:
+            base_data_dir: 基础数据存储目录
+        """
+        self.storage_service = DataStorageService(base_data_dir=base_data_dir)
+    
+    async def save_game_state(self, game_id: str, state: Dict[str, Any]) -> bool:
+        """
+        保存游戏状态
+        
+        Args:
+            game_id: 游戏ID
+            state: 游戏状态数据
+            
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self.storage_service._get_storage_manager(game_id)
+            # 保存游戏状态
+            result = storage_manager.save_game_state(state)
+            return result
+        except Exception as e:
+            print(f"保存游戏状态失败: {e}")
+            return False
+    
+    async def load_game_state(self, game_id: str) -> Optional[Dict[str, Any]]:
+        """
+        加载游戏状态
+        
+        Args:
+            game_id: 游戏ID
+            
+        Returns:
+            游戏状态数据，如果不存在则返回None
+        """
+        try:
+            # 获取存储管理器
+            storage_manager = self.storage_service._get_storage_manager(game_id)
+            # 读取最新的游戏状态
+            if os.path.exists(storage_manager.state_log_path):
+                with open(storage_manager.state_log_path, 'r', encoding='utf-8') as f:
+                    # 读取所有状态记录
+                    states = []
+                    for line in f:
+                        try:
+                            state = json.loads(line.strip())
+                            states.append(state)
+                        except json.JSONDecodeError:
+                            continue
+                    # 返回最新的状态
+                    if states:
+                        return states[-1]
+            return None
+        except Exception as e:
+            print(f"加载游戏状态失败: {e}")
+            return None
 
 
 # ===== 测试函数 =====
@@ -187,7 +173,7 @@ def test_data_storage_service():
 
         # 3. 测试玩家状态管理
         print("\n3. 测试玩家状态管理")
-        # todo: 与蔡书灏对接⑥
+        # 使用实际的PlayerStatus类
         player_id = "player_1"
         player_status = {
             "player_id": player_id,
@@ -235,7 +221,7 @@ def test_data_storage_service():
         # 5. 测试数据备份
         print("\n5. 测试数据备份")
         # route 5: 数据备份测试
-        backup_result = storage_service.create_backup(game_id, MockDataBackupType.FULL, "测试备份")
+        backup_result = storage_service.create_backup(game_id, DataBackupType.FULL, "测试备份")
         backup_success, backup_id, backup_info = backup_result
         print(f"创建备份: {'成功' if backup_success else '失败'}")
         if backup_success:
@@ -268,7 +254,7 @@ def test_data_storage_service():
         # 8. 测试数据导出
         print("\n8. 测试数据导出")
         # route 8: 数据导出测试
-        export_result = storage_service.export_data(game_id, MockExportFormat.ZIP)
+        export_result = storage_service.export_data(game_id, ExportFormat.ZIP)
         export_success, export_path, export_info = export_result
         print(f"导出数据: {'成功' if export_success else '失败'}")
         if export_success:
@@ -316,5 +302,70 @@ def test_data_storage_service():
             print(f"\n清理临时目录: {temp_dir}")
 
 
+# ===== 主函数 =====
+def main():
+    """
+    主函数，用于演示DataManager的使用
+    """
+    import asyncio
+    
+    async def test_data_manager():
+        """
+        测试DataManager类的功能
+        """
+        # 创建临时目录
+        temp_dir = tempfile.mkdtemp()
+        print(f"测试临时目录: {temp_dir}")
+        
+        try:
+            # 初始化DataManager
+            data_manager = DataManager(base_data_dir=temp_dir)
+            print("\n1. 初始化DataManager成功")
+            
+            # 测试游戏ID
+            game_id = "test_game_123"
+            
+            # 测试保存游戏状态
+            test_state = {
+                "game_id": game_id,
+                "phase": "day",
+                "day_number": 1,
+                "alive_players": ["player_1", "player_2"],
+                "dead_players": [],
+                "current_speaker": "player_1",
+                "vote_results": {},
+                "last_night_actions": {}
+            }
+            
+            print("\n2. 测试保存游戏状态")
+            save_result = await data_manager.save_game_state(game_id, test_state)
+            print(f"保存游戏状态: {'成功' if save_result else '失败'}")
+            
+            # 测试加载游戏状态
+            print("\n3. 测试加载游戏状态")
+            loaded_state = await data_manager.load_game_state(game_id)
+            print(f"加载游戏状态: {'成功' if loaded_state else '失败'}")
+            if loaded_state:
+                print(f"游戏阶段: {loaded_state.get('phase')}")
+                print(f"天数: {loaded_state.get('day_number')}")
+                print(f"存活玩家: {loaded_state.get('alive_players')}")
+            
+        finally:
+            # 清理临时目录
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+                print(f"\n清理临时目录: {temp_dir}")
+    
+    # 运行异步测试
+    asyncio.run(test_data_manager())
+
+
 if __name__ == "__main__":
+    # 运行DataManager测试
+    main()
+    
+    # 运行完整的DataStorageService测试
+    print("\n" + "="*50)
+    print("运行完整的DataStorageService测试")
+    print("="*50)
     test_data_storage_service()

@@ -11,7 +11,7 @@ from typing import Dict, Any, List, Tuple, Optional, Union
 # route A-1: 导入依赖模块
 from judge_system.data_manage.manage import GameStorageManager
 from judge_system.observer_interface import PlayerType, Role, PlayerStatus
-from interfaces import DataStorageInterface, DataBackupType, ExportFormat
+from judge_system.data_manage.datamanage_interface import DataStorageInterface, DataBackupType, ExportFormat
 from judge_system.data_manage.logging_config import game_logger
 
 
@@ -964,4 +964,118 @@ class DataStorageService(DataStorageInterface):
         except Exception as e:
             self.logger.error(f"Error getting werewolf action for game {game_id}: {e}")
             return None
+
+    # ============ 实现DataStorageInterface的抽象方法 ============
+
+    def save_game_event(self, event_data: Dict[str, Any]) -> bool:
+        """
+        保存游戏事件
+
+        Args:
+            event_data: 事件数据
+
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 从事件数据中获取游戏ID
+            game_id = event_data.get('game_id')
+            if not game_id:
+                self.logger.error("Game ID not found in event data")
+                return False
+
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+
+            # 保存游戏事件
+            result = storage_manager.save_game_event(event_data)
+            self.logger.debug(f"Saved game event for game {game_id}: {result}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error saving game event: {e}")
+            return False
+
+    def save_speech(self, speech_data: Dict[str, Any]) -> bool:
+        """
+        保存发言记录
+
+        Args:
+            speech_data: 发言数据
+
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 从发言数据中获取游戏ID
+            game_id = speech_data.get('game_id')
+            if not game_id:
+                self.logger.error("Game ID not found in speech data")
+                return False
+
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+
+            # 保存发言记录
+            result = storage_manager.save_speech(speech_data)
+            self.logger.debug(f"Saved speech for game {game_id}: {result}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error saving speech: {e}")
+            return False
+
+    def save_vote(self, vote_data: Dict[str, Any]) -> bool:
+        """
+        保存投票结果
+
+        Args:
+            vote_data: 投票数据
+
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 从投票数据中获取游戏ID
+            game_id = vote_data.get('game_id')
+            if not game_id:
+                self.logger.error("Game ID not found in vote data")
+                return False
+
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+
+            # 保存投票结果
+            result = storage_manager.save_vote(vote_data)
+            self.logger.debug(f"Saved vote for game {game_id}: {result}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error saving vote: {e}")
+            return False
+
+    def save_game_state(self, state_data: Dict[str, Any]) -> bool:
+        """
+        保存游戏状态
+
+        Args:
+            state_data: 游戏状态数据
+
+        Returns:
+            保存是否成功
+        """
+        try:
+            # 从状态数据中获取游戏ID
+            game_id = state_data.get('game_id')
+            if not game_id:
+                self.logger.error("Game ID not found in state data")
+                return False
+
+            # 获取存储管理器
+            storage_manager = self._get_storage_manager(game_id)
+
+            # 保存游戏状态
+            result = storage_manager.save_game_state(state_data)
+            self.logger.debug(f"Saved game state for game {game_id}: {result}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error saving game state: {e}")
+            return False
 

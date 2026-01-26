@@ -9,7 +9,7 @@ from typing import Dict, List, Any, Optional, Tuple, Union
 from enum import Enum
 from pathlib import Path
 
-from interfaces import GameStorageInterface, EventType, GamePhase, StorageDirectoryType
+from judge_system.data_manage.datamanage_interface import GameStorageInterface, EventType, GamePhase, StorageDirectoryType
 from judge_system.data_manage.logging_config import game_logger
 
 
@@ -881,4 +881,109 @@ class GameStorageManager(GameStorageInterface):
         except Exception as e:
             self.logger.error(f"Error loading werewolf action: {e}")
             return None
+
+    def save_player_status(self, player_status):
+        """
+        保存玩家状态
+
+        Args:
+            player_status: 玩家状态数据
+
+        Returns:
+            保存是否成功
+        """
+        try:
+            player_id = player_status.get('player_id')
+            if not player_id:
+                return False
+
+            # 构建玩家状态文件路径
+            player_dir = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "players"
+            player_dir.mkdir(exist_ok=True)
+            player_file = player_dir / f"{player_id}.json"
+
+            # 保存玩家状态
+            with open(player_file, 'w', encoding='utf-8') as f:
+                json.dump(player_status, f, ensure_ascii=False, indent=2)
+
+            # 更新最后修改时间
+            self._update_last_modified()
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving player status: {e}")
+            return False
+
+    def load_player_status(self, player_id):
+        """
+        加载玩家状态
+
+        Args:
+            player_id: 玩家ID
+
+        Returns:
+            玩家状态数据，如果不存在则返回None
+        """
+        # 构建玩家状态文件路径
+        player_file = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "players" / f"{player_id}.json"
+
+        if not os.path.exists(player_file):
+            return None
+
+        try:
+            with open(player_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            self.logger.error(f"Error loading player status: {e}")
+            return None
+
+    def save_all_player_statuses(self, player_statuses):
+        """
+        保存所有玩家状态
+
+        Args:
+            player_statuses: 玩家状态字典，键为玩家ID，值为玩家状态数据
+
+        Returns:
+            保存是否成功
+        """
+        try:
+            for player_id, status in player_statuses.items():
+                # 确保状态包含player_id
+                if 'player_id' not in status:
+                    status['player_id'] = player_id
+                self.save_player_status(status)
+
+            # 更新最后修改时间
+            self._update_last_modified()
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving all player statuses: {e}")
+            return False
+
+    def load_all_player_statuses(self):
+        """
+        加载所有玩家状态
+
+        Returns:
+            玩家状态字典，键为玩家ID，值为玩家状态数据
+        """
+        player_statuses = {}
+        
+        # 构建玩家状态目录路径
+        player_dir = self.game_dir_path / StorageDirectoryType.PRIVATE.value / "players"
+
+        if not os.path.exists(player_dir):
+            return player_statuses
+
+        try:
+            for file in os.listdir(player_dir):
+                if file.endswith('.json'):
+                    player_id = file[:-5]  # 移除.json后缀
+                    status = self.load_player_status(player_id)
+                    if status:
+                        player_statuses[player_id] = status
+        except Exception as e:
+            self.logger.error(f"Error loading all player statuses: {e}")
+
+        return player_statuses
 
