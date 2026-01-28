@@ -1,8 +1,8 @@
 """
 Seer/Witch strategy (Demo, refactored) - aligned with unified StrategyContext/StrategyDecision.
 
-为啥要重构成这样：
-- 我们项目里狼人/村民已经统一成 “输入 StrategyContext → 输出 StrategyDecision” 的接口了。
+为啥要重构成这样（大白话版）：
+- 你们项目里狼人/村民已经统一成 “输入 StrategyContext → 输出 StrategyDecision” 的接口了。
 - 原来的神职 Demo 用的是 {decision_type, target, content} 这种“半成品结构”，而且角色名中英混用（"女巫" vs "witch"），会导致：
   - 分支永远进不去（你以为女巫在做事，其实一直返回默认 no_potion）
   - 集成层没法把结果直接映射成 submit_night_action / submit_vote / submit_speech
@@ -99,8 +99,22 @@ class KnownPlayer(BaseModel):
     notes: Optional[str] = None
 
 
+class InferenceRankings(BaseModel):
+    """
+    新版输入（来自第二组LLM）：只给“排序”，我们策略侧把它转换成概率分数用。
+    """
+
+    werewolf_likelihood: Optional[list[str]] = None
+    villager_likelihood: Optional[list[str]] = None
+    seer_likelihood: Optional[list[str]] = None
+    witch_likelihood: Optional[list[str]] = None
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    source: Optional[str] = None
+
+
 class Inference(BaseModel):
     known_players: list[KnownPlayer] = Field(default_factory=list)
+    rankings: Optional[InferenceRankings] = None
 
 
 class Constraints(BaseModel):
@@ -365,11 +379,10 @@ class SeerWitchStrategyDemo:
 
         # 1) 优先救人：有解药 + 有被刀者提示 + 看起来像好人
         if victim and potions.antidote_left > 0 and "save" in allowed:
+            # 1.1 自救分支（是否允许自救由法官配置决定）
             if context.meta.self_player_id and victim == context.meta.self_player_id:
                 # 大白话：能不能自救得看规则，别瞎救导致法官拒绝
-                if potions.can_self_save is False:
-                    pass
-                else:
+                if potions.can_self_save is not False:
                     d = NightActionDecision(
                         data=NightActionData(action_type="save", target_id=victim),
                         confidence=0.7,
@@ -378,6 +391,7 @@ class SeerWitchStrategyDemo:
                     ok, why = self.validate(context, d)
                     return d if ok else self.fallback(context, {"reason": why, "decision": d.model_dump()})
 
+            # 1.2 救别人：目标越像好人，越值得救（demo：wolf_prob <= 0.4 就救）
             wolf_prob = self._get_wolf_prob(context, victim)
             if wolf_prob <= 0.4:
                 d = NightActionDecision(
@@ -426,7 +440,7 @@ class SeerWitchStrategyDemo:
                 )
             else:
                 content = f"第{day}天我先听逻辑，主要看投票和前后矛盾。{(' ' + summary) if summary else ''}"
-        else:
+            else:
             # 女巫白天尽量低调：别乱跳身份（demo先保守）
             content = f"第{day}天我先听完大家发言再站边，重点看投票和逻辑闭环。{(' ' + summary) if summary else ''}"
 
@@ -473,6 +487,38 @@ class SeerWitchStrategyDemo:
     def _kp_by_id(self, context: StrategyContext) -> dict[str, KnownPlayer]:
         return {kp.player_id: kp for kp in context.inference.known_players}
 
+    def _rank_score(self, ranking: Optional[list[str]], player_id: str) -> Optional[float]:
+        if not ranking:
+            return None
+        if player_id not in ranking:
+            return None
+        n = len(ranking)
+        idx = ranking.index(player_id)
+        if n <= 1:
+            return 1.0
+        return max(0.0, min(1.0, 1.0 - (idx / (n - 1))))
+
+    def _derive_wolf_prob_from_rankings(self, context: StrategyContext, player_id: str) -> Optional[float]:
+        r = context.inference.rankings
+        if not r:
+            return None
+        wolf_s = self._rank_score(r.werewolf_likelihood, player_id)
+        vill_s = self._rank_score(r.villager_likelihood, player_id)
+
+        wolf_prob: Optional[float] = None
+        if wolf_s is not None:
+            wolf_prob = 0.1 + 0.8 * wolf_s
+        if vill_s is not None:
+            good_prob = 0.1 + 0.8 * vill_s
+            if wolf_prob is None:
+                wolf_prob = 1.0 - good_prob
+            else:
+                wolf_prob = wolf_prob - 0.6 * (good_prob - 0.5)
+
+        if wolf_prob is None:
+            return None
+        return max(0.0, min(1.0, wolf_prob))
+
     def _excluded_targets(self, context: StrategyContext) -> set[str]:
         excluded = set(context.constraints.forbid_targets)
         if context.meta.self_player_id:
@@ -502,7 +548,10 @@ class SeerWitchStrategyDemo:
 
     def _get_wolf_prob(self, context: StrategyContext, player_id: str) -> float:
         kp = self._kp_by_id(context).get(player_id)
-        return kp.camp_prob.werewolf if kp else 0.5
+        if kp:
+            return kp.camp_prob.werewolf
+        derived = self._derive_wolf_prob_from_rankings(context, player_id)
+        return derived if derived is not None else 0.5
 
     def _pick_seer_check_target(self, context: StrategyContext) -> tuple[Optional[str], str]:
         candidates = self._alive_candidate_ids(context)
@@ -651,4 +700,23 @@ def test_context_validation_error() -> None:
         assert False, "expected ValidationError"
     except ValidationError:
         assert True
+
+
+def test_rankings_input_affects_witch_poison_choice() -> None:
+    s = SeerWitchStrategyDemo()
+    ctx = _demo_context("witch", "witch_night")
+    # 把 victim 设为空，让女巫走“考虑毒人”分支
+    ctx.private_info.tonight_victim_hint = None
+    # 仅给排名（不提供 known_players 的概率）
+    ctx.inference = Inference(
+        known_players=[],
+        rankings=InferenceRankings(
+            werewolf_likelihood=["player_002", "player_004", "player_003"],
+            villager_likelihood=["player_003", "player_004", "player_002"],
+        ),
+    )
+    d = s.decide(ctx)
+    assert d.decision_type == "night_action"
+    # demo里只有“狼概率>=0.8才毒”，player_002 会被映射到接近0.9
+    assert d.data.action_type in {"poison", "no_potion"}
 

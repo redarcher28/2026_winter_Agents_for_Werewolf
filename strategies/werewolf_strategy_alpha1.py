@@ -84,14 +84,33 @@ class KnownPlayer(BaseModel):
     notes: Optional[str] = None
 
 
+class InferenceRankings(BaseModel):
+    """
+    新版输入（来自第二组LLM）：不再给每个玩家的数值概率，而是给“排序”。
+    约定：列表从左到右 = 越可能（更像）该身份/阵营。
+    - werewolf_likelihood：越靠前越像狼人（wolf_prob 越高）
+    - villager_likelihood：越靠前越像好人（wolf_prob 越低 / good_prob 越高）
+    """
+
+    werewolf_likelihood: Optional[list[str]] = None
+    villager_likelihood: Optional[list[str]] = None
+    seer_likelihood: Optional[list[str]] = None
+    witch_likelihood: Optional[list[str]] = None
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    source: Optional[str] = None
+
+
 class Inference(BaseModel):
     known_players: list[KnownPlayer] = Field(default_factory=list)
+    rankings: Optional[InferenceRankings] = None
 
 
 class Constraints(BaseModel):
     allowed_actions: list[str] = Field(default_factory=list)  # e.g. ["speech","vote","kill"]
     max_actions_this_phase: int = Field(default=1, ge=1)
     forbid_targets: list[str] = Field(default_factory=list)
+    # 可选：发言轮次/顺序由集成层（通常来自法官系统）注入
+    current_turn_order: int = 0
 
 
 class StrategyContext(BaseModel):
@@ -401,6 +420,71 @@ class WerewolfStrategyAlpha1:
     def _kp_by_id(self, context: StrategyContext) -> dict[str, KnownPlayer]:
         return {kp.player_id: kp for kp in context.inference.known_players}
 
+    def _rank_score(self, ranking: Optional[list[str]], player_id: str) -> Optional[float]:
+        """
+        把“排名列表”映射成 [0,1] 的分数：
+        - 排名越靠前，分数越接近 1
+        - 排名越靠后，分数越接近 0
+        """
+        if not ranking:
+            return None
+        if player_id not in ranking:
+            return None
+        n = len(ranking)
+        idx = ranking.index(player_id)
+        if n <= 1:
+            return 1.0
+        return max(0.0, min(1.0, 1.0 - (idx / (n - 1))))
+
+    def _derive_wolf_prob_from_rankings(self, context: StrategyContext, player_id: str) -> Optional[float]:
+        """
+        核心改动：第二组只给“排序”，我们在这里统一把排序变成可用的 wolf_prob。
+        规则（先简单可控，后续可以调参）：
+        - 若有 werewolf_likelihood：越靠前 wolf_prob 越高（映射到 [0.1, 0.9]）
+        - 若有 villager_likelihood：越靠前越像好人，会拉低 wolf_prob
+        """
+        r = context.inference.rankings
+        if not r:
+            return None
+
+        wolf_s = self._rank_score(r.werewolf_likelihood, player_id)
+        vill_s = self._rank_score(r.villager_likelihood, player_id)
+
+        wolf_prob: Optional[float] = None
+
+        if wolf_s is not None:
+            wolf_prob = 0.1 + 0.8 * wolf_s
+
+        if vill_s is not None:
+            good_prob = 0.1 + 0.8 * vill_s
+            if wolf_prob is None:
+                # 没给“像狼排序”，那就从“像好人排序”反推
+                wolf_prob = 1.0 - good_prob
+            else:
+                # 同时给了两种排序：稍微融合一下（好人排序高 -> wolf_prob 往下拉）
+                wolf_prob = wolf_prob - 0.6 * (good_prob - 0.5)
+
+        if wolf_prob is None:
+            return None
+
+        return max(0.0, min(1.0, wolf_prob))
+
+    def _get_wolf_prob(self, context: StrategyContext, player_id: str) -> float:
+        kp = self._kp_by_id(context).get(player_id)
+        if kp:
+            return kp.camp_prob.werewolf
+        derived = self._derive_wolf_prob_from_rankings(context, player_id)
+        return derived if derived is not None else 0.5
+
+    def _get_good_prob(self, context: StrategyContext, player_id: str) -> float:
+        kp = self._kp_by_id(context).get(player_id)
+        if kp:
+            return kp.camp_prob.good
+        wolf_prob = self._derive_wolf_prob_from_rankings(context, player_id)
+        if wolf_prob is None:
+            return 0.5
+        return max(0.0, min(1.0, 1.0 - wolf_prob))
+
     def _pick_kill_target(self, context: StrategyContext) -> tuple[Optional[str], str, float]:
         candidates = self._alive_candidate_ids(context)
         if not candidates:
@@ -417,7 +501,7 @@ class WerewolfStrategyAlpha1:
         # 2) Otherwise: kill most-likely-good (wolves want to remove strong good)
         scored: list[tuple[float, str]] = []
         for pid in candidates:
-            good_prob = kp_by_id.get(pid).camp_prob.good if kp_by_id.get(pid) else 0.5
+            good_prob = self._get_good_prob(context, pid)
             scored.append((good_prob, pid))
         scored.sort(key=lambda t: (-t[0], t[1]))
         best_good_prob, best_pid = scored[0]
@@ -437,7 +521,7 @@ class WerewolfStrategyAlpha1:
         scored: list[tuple[float, int, str]] = []
         for pid in candidates:
             kp = kp_by_id.get(pid)
-            wolf_prob = kp.camp_prob.werewolf if kp else 0.5
+            wolf_prob = self._get_wolf_prob(context, pid)
             tag_bonus = 0
             if kp:
                 tag_bonus = sum(1 for t in kp.tags if t in self.DAY_SUSPECT_TAGS)
@@ -612,4 +696,24 @@ def test_context_validation_error_example() -> None:
         assert False, "expected ValidationError"
     except ValidationError:
         assert True
+
+
+def test_rankings_input_works_without_probabilities() -> None:
+    s = WerewolfStrategyAlpha1()
+    ctx = _ctx_base(
+        meta={"phase": "werewolf_night"},
+        inference={
+            "known_players": [],
+            "rankings": {
+                # 约定：越靠前越像狼人 / 越像村民
+                "werewolf_likelihood": ["player_005", "player_003", "player_002"],
+                "villager_likelihood": ["player_002", "player_003", "player_005"],
+            },
+        },
+    )
+    d = s.decide(ctx)
+    assert d.decision_type == "night_action"
+    assert d.data.action_type == "kill"
+    # 夜刀优先 kill “更像好人”的（good_prob更高）：villager_likelihood 里更靠前的 player_002
+    assert d.data.target_id == "player_002"
 

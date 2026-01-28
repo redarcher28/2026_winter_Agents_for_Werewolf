@@ -82,14 +82,33 @@ class KnownPlayer(BaseModel):
     notes: Optional[str] = None
 
 
+class InferenceRankings(BaseModel):
+    """
+    新版输入（来自第二组LLM）：只给“排序”而不是概率。
+    约定：列表从左到右 = 越可能该阵营/身份。
+    - werewolf_likelihood：越靠前 wolf_prob 越高
+    - villager_likelihood：越靠前 wolf_prob 越低（更像好人）
+    """
+
+    werewolf_likelihood: Optional[list[str]] = None
+    villager_likelihood: Optional[list[str]] = None
+    seer_likelihood: Optional[list[str]] = None
+    witch_likelihood: Optional[list[str]] = None
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    source: Optional[str] = None
+
+
 class Inference(BaseModel):
     known_players: list[KnownPlayer] = Field(default_factory=list)
+    rankings: Optional[InferenceRankings] = None
 
 
 class Constraints(BaseModel):
     allowed_actions: list[str] = Field(default_factory=list)
     max_actions_this_phase: int = Field(default=1, ge=1)
     forbid_targets: list[str] = Field(default_factory=list)
+    # 可选：发言轮次/顺序由集成层（通常来自法官系统）注入
+    current_turn_order: int = 0
 
 
 class StrategyContext(BaseModel):
@@ -555,6 +574,43 @@ class VillagerStrategyAlpha1:
     def _kp_by_id(self, context: StrategyContext) -> dict[str, KnownPlayer]:
         return {kp.player_id: kp for kp in context.inference.known_players}
 
+    # -----------------------------
+    # 排名输入 → 概率（兼容第二组LLM只给排名）
+    # -----------------------------
+
+    def _rank_score(self, ranking: Optional[list[str]], player_id: str) -> Optional[float]:
+        if not ranking:
+            return None
+        if player_id not in ranking:
+            return None
+        n = len(ranking)
+        idx = ranking.index(player_id)
+        if n <= 1:
+            return 1.0
+        return max(0.0, min(1.0, 1.0 - (idx / (n - 1))))
+
+    def _derive_wolf_prob_from_rankings(self, context: StrategyContext, player_id: str) -> Optional[float]:
+        r = context.inference.rankings
+        if not r:
+            return None
+
+        wolf_s = self._rank_score(r.werewolf_likelihood, player_id)
+        vill_s = self._rank_score(r.villager_likelihood, player_id)
+
+        wolf_prob: Optional[float] = None
+        if wolf_s is not None:
+            wolf_prob = 0.1 + 0.8 * wolf_s
+        if vill_s is not None:
+            good_prob = 0.1 + 0.8 * vill_s
+            if wolf_prob is None:
+                wolf_prob = 1.0 - good_prob
+            else:
+                wolf_prob = wolf_prob - 0.6 * (good_prob - 0.5)
+
+        if wolf_prob is None:
+            return None
+        return max(0.0, min(1.0, wolf_prob))
+
     def _init_prob_cache(self, context: StrategyContext) -> None:
         current_game_id = context.meta.game_id
 
@@ -576,7 +632,11 @@ class VillagerStrategyAlpha1:
 
         for pid in all_player_ids:
             if pid not in self._camp_prob_cache:
-                self._camp_prob_cache[pid] = CampProb(good=0.5, werewolf=0.5)
+                derived = self._derive_wolf_prob_from_rankings(context, pid)
+                if derived is None:
+                    self._camp_prob_cache[pid] = CampProb(good=0.5, werewolf=0.5)
+                else:
+                    self._camp_prob_cache[pid] = CampProb(good=1.0 - derived, werewolf=derived)
 
     def _get_wolf_prob(self, context: StrategyContext, player_id: str) -> float:
         if not hasattr(self, '_camp_prob_cache'):
@@ -957,6 +1017,24 @@ def test_villager_tie_break_mechanism() -> None:
     d = s.decide(ctx)
     assert d.decision_type == "vote"
     assert d.data.target_id in ["player_v003", "player_v004"]
+
+
+def test_villager_rankings_seed_prob_cache() -> None:
+    s = VillagerStrategyAlpha1()
+    ctx = _ctx_villager_base(
+        inference={
+            "known_players": [],
+            "rankings": {
+                "werewolf_likelihood": ["player_v005", "player_v004", "player_v003", "player_v002"],
+                "villager_likelihood": ["player_v002", "player_v003", "player_v004", "player_v005"],
+            },
+        }
+    )
+    # 这里不要求精确数值，只要“能初始化成非默认且可用”
+    p2 = s._get_wolf_prob(ctx, "player_v002")
+    p5 = s._get_wolf_prob(ctx, "player_v005")
+    assert p2 < 0.5  # 更像村民，wolf_prob 应该偏低
+    assert p5 > 0.5  # 更像狼人，wolf_prob 应该偏高
 
 
 if __name__ == "__main__":
