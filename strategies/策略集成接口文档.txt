@@ -1,0 +1,266 @@
+策略集成接口文档（Strategy Integration API Spec）
+版本：v1.0
+日期：2026-01-14
+
+本文件定义“策略模块”与“Agent框架”的对接协议（内部接口/可选HTTP服务接口），并给出与法官系统 WebSocket 动作的映射关系。
+
+------------------------------------------------------------
+0. 术语与通用约定
+------------------------------------------------------------
+0.1 ID约定
+- game_id：对局ID（字符串）
+- agent_id：Agent实例ID（字符串）
+- player_id：玩家ID，建议形如 "player_001"/"p1"（以法官系统为准）
+- request_id / event_id：消息追踪ID（字符串）
+
+0.2 时间字段
+- timestamp：ISO 8601，例如 "2026-01-14T12:00:00Z"
+
+0.3 阶段（phase）命名（示例）
+- werewolf_night / seer_night / witch_night
+- daytime_discussion / daytime_voting
+（最终以法官系统 phase_change 事件中的 new_phase 为准）
+
+0.4 策略输出必须“可解析”
+- 强制要求策略输出为严格JSON对象（禁止夹带自然语言前后缀）
+- 允许附加 debug 字段，但不得影响解析与法官提交动作
+
+------------------------------------------------------------
+1. Agent框架 ⇄ 策略模块：本地调用接口（推荐）
+------------------------------------------------------------
+1.1 核心函数
+- StrategyEngine.decide(context) -> decision
+- StrategyEngine.validate(context, decision) -> (ok, reason)
+- StrategyEngine.fallback(context, last_error) -> decision
+
+（实现语言通常为Python，但本规范只约束数据形态，不强制具体代码结构）
+
+1.2 StrategyContext（输入）
+StrategyContext 是策略决策的唯一输入，建议字段如下（可增可减，但不要破坏兼容性）：
+
+- meta：
+  - game_id: str
+  - agent_id: str
+  - role: str                      # "werewolf"/"seer"/"witch"/"villager"/...
+  - phase: str                     # 当前阶段
+  - day_number: int                # 第几天/第几轮
+  - time_remaining: int | None     # 秒（若可用）
+
+- public_state：
+  - alive_players: list[{"id":str,"name":str|None,"is_ai":bool|None}]
+  - dead_players: list[{"id":str,"name":str|None,"death_reason":str|None}]
+  - last_night: dict | None        # 可选：night_reveal摘要
+  - last_vote: dict | None         # 可选：vote_result摘要
+
+- private_info（由法官系统权限过滤后提供；字段可能不存在，策略必须容错）：
+  - werewolf_partners: list[str] | None
+  - seer_check_history: list[{"target_id":str,"result":"good"|"werewolf","round":int}] | None
+  - witch_potions: {"antidote_left":int,"poison_left":int,"can_self_save":bool|None} | None
+  - tonight_victim_hint: str | None     # 女巫可见的“今夜被刀者”（若法官提供）
+
+- memory：
+  - memory_summary: str            # 近期关键事件摘要（建议<=1k tokens）
+  - recent_events: list[dict]      # 可选：原始事件列表（受上下文窗口限制）
+
+- inference（身份推断，可选）：
+  - known_players: list[{
+      "player_id": str,
+      "camp_prob": {"good": float, "werewolf": float},
+      "tags": list[str],
+      "notes": str | None
+    }]
+
+- constraints（强约束，建议由Agent框架提供）
+  - allowed_actions: list[str]     # 例如 ["speak","vote","kill","check","save","poison","no_potion"]
+  - max_actions_this_phase: int    # 通常为1
+  - forbid_targets: list[str]      # 例如已死玩家、不可自救时的自己等
+
+1.3 StrategyDecision（输出）
+所有策略输出必须匹配以下之一：
+
+A) 发言（speech）
+{
+  "decision_type": "speech",
+  "data": {
+    "content": "string",
+    "speech_round": 1,
+    "turn_order": 3
+  },
+  "confidence": 0.78,
+  "debug": {"reason": "prefer_soft_push_in_discussion"}
+}
+
+B) 投票（vote）
+{
+  "decision_type": "vote",
+  "data": {
+    "target_id": "player_005",
+    "round": 3
+  },
+  "confidence": 0.64
+}
+
+C) 夜晚行动（night_action）
+{
+  "decision_type": "night_action",
+  "data": {
+    "action_type": "kill",
+    "target_id": "player_003"
+  },
+  "confidence": 0.71
+}
+
+D) 不行动（no_op）
+{
+  "decision_type": "no_op",
+  "data": {},
+  "confidence": 0.10,
+  "debug": {"reason": "timeout/fallback/invalid_context"}
+}
+
+兼容性要求：
+- 必须包含 decision_type 与 data
+- 不允许输出数组作为根节点
+- target_id 必须使用法官系统认可的玩家ID格式
+
+------------------------------------------------------------
+2. （可选）策略模块作为独立服务：HTTP接口
+------------------------------------------------------------
+说明：MVP阶段可先做“本地调用”。若团队希望策略热更新、A/B测试、跨语言复用，可将策略封装为HTTP服务。
+
+2.1 POST /strategy/decide
+请求：
+{
+  "request_id": "req_1001",
+  "timestamp": "2026-01-14T12:00:00Z",
+  "context": { ...StrategyContext... }
+}
+
+响应：
+{
+  "response_to": "req_1001",
+  "timestamp": "2026-01-14T12:00:01Z",
+  "decision": { ...StrategyDecision... }
+}
+
+2.2 POST /strategy/validate
+请求：
+{
+  "request_id": "req_1002",
+  "context": { ...StrategyContext... },
+  "decision": { ...StrategyDecision... }
+}
+
+响应：
+{
+  "response_to": "req_1002",
+  "ok": true,
+  "reason": ""
+}
+
+------------------------------------------------------------
+3. StrategyDecision → 法官系统WebSocket动作映射
+------------------------------------------------------------
+以下映射遵循现有《AI Agent可用接口文档》（submit_* / query_* 的消息结构）。
+
+3.1 speech → submit_speech
+StrategyDecision：
+{
+  "decision_type":"speech",
+  "data":{"content":"...","speech_round":1,"turn_order":3}
+}
+
+WebSocket发送：
+{
+  "action":"submit_speech",
+  "data":{
+    "speaker_id":"{agent_id或player_id（以法官实现为准）}",
+    "content":"...",
+    "speech_round":1,
+    "turn_order":3
+  }
+}
+
+3.2 vote → submit_vote
+StrategyDecision：
+{
+  "decision_type":"vote",
+  "data":{"target_id":"player_005","round":3}
+}
+
+WebSocket发送：
+{
+  "action":"submit_vote",
+  "data":{
+    "voter_id":"{agent_id或player_id}",
+    "target_id":"player_005",
+    "round":3
+  },
+  "timestamp":"..."
+}
+
+3.3 night_action → submit_night_action
+StrategyDecision：
+{
+  "decision_type":"night_action",
+  "data":{"action_type":"kill","target_id":"player_003"}
+}
+
+WebSocket发送（示例）：
+{
+  "action":"submit_night_action",
+  "data":{
+    "action_type":"kill",
+    "performer_id":"{agent_id或角色实例ID}",
+    "target_id":"player_003",
+    "round":2
+  }
+}
+
+注意：
+- "explode"（狼人自爆）、"shoot"（猎人开枪）等是否存在，取决于法官系统支持的动作集合。
+- 若法官系统不支持某action_type，Agent应在 validate 阶段拦截并fallback。
+
+------------------------------------------------------------
+4. 策略输出解析与健壮性要求（强制）
+------------------------------------------------------------
+- 输出必须为严格JSON对象；禁止“```json”围栏与自然语言说明混入（否则解析失败）
+- 必须可在1次JSON.parse/loads中解析成功
+- 任何解析失败都必须触发 fallback(context, error) 输出 no_op 或最小合法动作
+- Agent框架必须二次校验：
+  - decision_type 是否与当前 phase 匹配
+  - target_id 是否存活、是否合法
+  - 技能次数是否耗尽（女巫药、猎人枪等）
+
+------------------------------------------------------------
+5. 错误码与错误响应（策略层）
+------------------------------------------------------------
+5.1 策略服务/模块错误格式（建议）
+{
+  "error":{
+    "code":"STRATEGY_TIMEOUT|STRATEGY_PARSE_ERROR|STRATEGY_INVALID_DECISION|STRATEGY_VALIDATION_FAILED",
+    "message":"...",
+    "details":{...}
+  }
+}
+
+5.2 常见策略错误码说明
+- STRATEGY_TIMEOUT：LLM或策略计算超时，需fallback
+- STRATEGY_PARSE_ERROR：LLM输出不可解析，需fallback（可重试1次）
+- STRATEGY_INVALID_DECISION：decision_type或字段缺失/类型错误
+- STRATEGY_VALIDATION_FAILED：目标非法/阶段不匹配/技能不可用
+
+5.3 与法官系统错误码联动
+当法官系统返回以下错误码（示例：INVALID_PHASE/INVALID_TARGET/TIMEOUT等），Agent应：
+1) 记录错误到MemoryEntries（用于复盘）
+2) 在同一阶段允许的情况下重试一次（加严约束）
+3) 再失败则 no_op
+
+------------------------------------------------------------
+6. 最小对接清单（策略组交付物）
+------------------------------------------------------------
+每个角色至少交付：
+- 1份提示词模板（含严格JSON输出要求）
+- 1套决策字段映射（对应本规范 StrategyDecision）
+- 3-5个few-shot示例（覆盖：夜晚行动/白天发言/投票）
+- 兜底策略规则（无需LLM也能返回合法决策）

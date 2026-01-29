@@ -1,0 +1,152 @@
+1. Agent 状态流转图
+状态节点及流转逻辑：
+初始状态：INITIALIZING，触发 “启动” 后进入CONNECTING
+CONNECTING：
+连接成功 → 进入CONNECTED
+连接失败 → 进入ERROR
+CONNECTED：
+获取配置成功 → 进入PLAYING
+获取配置失败 → 进入ERROR
+PLAYING：
+事件到达 → 进入PROCESSING_EVENTS → 需要决策 → 进入DECISION_MAKING → 决策完成 → 进入ACTION_EXECUTION → 行动提交后返回PLAYING
+被杀死 / 放逐 → 进入DEAD
+连接断开 → 进入DISCONNECTED
+狼人自爆 → 进入NIGHT（仅狼人角色，自爆后当前回合终止，直接进入夜晚阶段）
+DISCONNECTED/ERROR等状态可回流至对应前置状态（如DISCONNECTED可尝试重连回CONNECTING）
+2. Agent 实例初始化时序图
+参与组件：Main Program、Agent 实例、AgentConfig、AgentMemory、CommClient、LLMCient、DecisionEngine
+流程：
+Main Program 创建AgentConfig（12 人标准局配置：4 狼、4 普通村民、1 预言家、1 女巫、1 猎人、1 白痴，含各角色技能限制）
+实例化ExampleWerewolfAgent(conf)，Agent 实例设置state=INITIALIZING
+Agent 实例依次创建：
+AgentMemory(max_entries=100)（存储夜间行动记录、白天发言、投票结果等）
+CommunicationClient(self)（支持 WebSocket 协议，与法官服务器交互）
+LLMCient(conf.llm_config)（调用大语言模型生成发言、决策目标）
+DecisionEngine(self)（集成狼人悍跳、警徽流规划、神职技能判断等策略）
+初始化 “游戏状态空字典”“Known_players 空字典”（记录玩家号码、身份推测），创建日志记录器
+返回 Agent 实例给 Main Program
+3. 游戏阶段及狼人行动流程（含法官标准流程）
+3.1 基础配置（12 人标准局）
+身份牌：狼人 4 张、普通村民 4 张、神职牌 4 张（预言家、女巫、猎人、白痴）
+道具：1-12 号号码牌各 1 张，需 1 人担任法官（不参与游戏，仅主持流程）
+胜利条件：狼人阵营（屠边，杀光神职或杀光村民）；好人阵营（找出所有狼人并放逐）
+3.2 完整流程
+游戏开始 → 法官分发号码牌 + 身份牌（玩家确认后倒扣，禁止主动展示）→ 夜晚阶段 → 白天阶段 → 胜负判定 → 游戏结束
+3.2.1 夜晚阶段（法官按固定顺序唤醒角色，标准话术 + 操作）
+法官：广播 “天黑请闭眼”（所有玩家闭眼，未听到对应口令不得睁眼）
+狼人环节（第一夜 30 秒，后续 20 秒）：
+法官：“狼人请睁眼，狼人请相互确认身份”（狼人睁眼认队友，可用手势沟通）
+法官：“请狼人选择今夜要杀死的玩家”（狼人共同举号码，未统一意见则为平安夜，可选择自刀）
+法官：“上帝看见这个号码，狼人请确认”（法官举被害者号码，狼人点头确认）
+法官：“狼人请闭眼”
+预言家环节（20 秒）：
+法官：“预言家请睁眼”（预言家睁眼）
+法官：“请选择今晚你要查验的对象”（预言家举目标号码，可查自己、已死者或重复对象）
+法官：“拇指向上表示好人阵营，拇指向下表示狼人阵营，该玩家的身份是这个”（如实反馈阵营）
+法官：“预言家看清请确认”（预言家点头）→ “预言家请闭眼”
+女巫环节（20 秒）：
+法官：“女巫请睁眼”（女巫睁眼）
+法官：“今夜该名玩家被狼人杀死，你是否使用解药？”（未用解药则举被害者号码，女巫拇指向上表救人，摇头表不救；已用解药则无手势）
+法官：“你是否使用毒药？”（一晚最多用 1 瓶药，可举号码毒人或摇头不毒，解药不可自救）
+法官：“女巫请确认”（法官反馈用药结果，女巫点头）→ “女巫请闭眼”
+猎人环节（5 秒）：
+法官：“猎人请睁眼”（猎人睁眼）
+法官：“今夜你的开枪状态是这个”（未被毒死则拇指向上，被毒死则拇指向下，拇指向下时死亡后无法发动技能）
+法官：“猎人请闭眼”
+白痴环节（仅第一夜，5 秒）：
+法官：“白痴请睁眼”（白痴睁眼让法官确认）→ “白痴请闭眼”
+3.2.2 白天阶段（含警长竞选、遗言规则）
+天亮与警长竞选（仅第一天）：
+法官：广播 “天亮了，现在开始警长竞选，请竞选的玩家举手”
+竞选玩家依次发言（可放弃竞选，但放弃后不可投票），发言结束后非竞选玩家投票
+法官：“XX 当选警长”（若狼人警上自爆，则本局无警徽；连续双爆吞警徽）
+公布夜间结果：
+有死者：法官广播 “昨天晚上死亡的玩家是 XX”（不公布身份），死者留遗言（仅第一夜被刀 / 公投者有遗言，其他情况无）
+平安夜：法官广播 “昨晚是个平安夜”
+白天讨论（Daytime_DISCUS）：
+法官：“请警长选择从死左 / 死右（首夜无人死则警左 / 警右）开始发言”
+玩家按顺序发言（他人不可打断），分析身份、分享信息（如预言家报查验、狼人悍跳）
+白天投票（Daytime_VOTIN）：
+法官：“发言完毕，请玩家选择公投的对象，倒计时 5 秒”
+玩家举号码投票，得票最多者被放逐（平票则平票玩家再发言，二次投票仍平票则直接进入夜晚）
+被放逐者若为猎人（非毒死），可举号码发动技能带走 1 人，随后留遗言（若有）
+法官更新状态：广播 “vote_result” 事件，所有玩家更新记忆
+4. Agent 与法官服务器的连接及初始化交互时序图
+参与组件：Agent、CommClient、Judge Server、Agent 内部状态
+流程：
+Agent 启动 → 调用connect() → CommClient 发起 WebSocket 握手（地址：ws://judge-server/game/{game_id}/agent/{agent_id}）
+连接成功 → CommClient 回调 Agent → Agent 内部状态设为CONNECTED
+Agent 发起query("get_config", config_type="agent_settings") → CommClient 发送请求 → Judge Server 返回 12 人局身份配置、技能规则 → Agent 接收配置数据
+Agent 发起query("query_role_info", info_type="my_role") → CommClient 发送请求 → Judge Server 返回角色信息（如my_role=Role.WEREWOLF）→ Agent 存储角色及技能限制（如狼人可自爆）
+Agent 启动主循环：设_running=True → 内部状态设为PLAYING → 创建_main_loop()任务 → Agent 正式运行
+5. AI Agent 系统与法官系统的架构及数据流图
+5.1 组件划分
+外部组件：大语言模型服务（生成决策 / 发言）、游戏数据库（存储身份配置、历史对局）
+AI Agent 系统：
+生命周期模块：初始化 Init → 连接 Connect → 游戏开始 OnGameStart → 游戏进行 Playing → 游戏结束 / 停止 Stop
+核心循环模块：事件处理 ProcessEvents → 阶段响应 HandlePhase（含狼人夜 / 预言家夜等子阶段）→ 决策更新 UpdateStrategy（如狼人警徽流规划）→ 心跳 Heartbeat → 主循环 MainLoop（含错误重试）
+核心功能模块：
+记忆模块 AgentMemory（存储夜间行动、发言、投票，支持检索近期 5 条关键事件）
+决策引擎 DecisionEngine（集成悍跳、倒钩、冲锋等狼人策略，神职技能使用判断）
+LLM 模块 LLMCient（API 调用，生成符合角色逻辑的发言）
+通信模块 CommClient（WebSocket 交互，处理法官广播、行动提交）
+数据流模块：游戏状态 GameState（阶段、天数、存活玩家）、策略配置 Strategy（狼人屠边目标）、记忆存储 MemoryEntries、玩家信息 KnownPlayers（身份推测概率）
+法官系统：游戏状态管理器（维护存活 / 死亡列表）、行动验证器（判断狼人是否统一意见、女巫用药合法性）、事件广播器（推送 phase_change、vote_result 等事件）
+5.2 交互逻辑
+CommClient 通过 WebSocket 与法官系统交互：提交 kill/check/vote 等行动、接收夜间结果 / 阶段变更广播
+LLMCient 调用外部大语言模型：基于记忆摘要生成狼人悍跳发言、预言家查验逻辑
+决策引擎结合数据：根据 GameState（如存活神职数量）、MemoryEntries（如玩家发言疑点）生成行动目标（如优先刀女巫）
+6. Agent 事件处理流程时序图
+参与组件：Judge Server、CommClient、Event Queue、Agent、AgentMemory、Event Handlers
+流程：
+Judge Server 推送事件（类型：phase_change/player_speech/vote_result/werewolf_explode等）→ CommClient → 放入Event Queue（asyncio.Queue）
+Agent 调用_process_pending_events() → 从Event Queue执行get_next_event()（返回事件 / None）
+若存在事件：
+Agent 调用add_event(event)（计算重要性：如 “预言家报查杀” 权重 > 普通发言，添加标签，维护记忆条目）
+调用_get_event_handler(event_type)匹配对应处理器：
+phase_change：_handle_phase_change(event) → 更新game_state[phase]（如werewolf_night→seer_night）、记录阶段变更时间
+player_speech：_handle_player_speech(event) → 分析发言逻辑（如是否矛盾）、更新 KnownPlayers 中该玩家的身份概率
+vote_result：_handle_vote_result(event) → 统计投票流向、判断阵营绑定（如 A 始终投 B，推测为对立阵营）
+night_reveal：_handle_night_reveal(event) → 记录死者信息、判断女巫是否用药（如死者为狼人，推测自刀骗药）
+player_death：_handle_player_death(event) → 更新玩家存活状态；若自身死亡则设state=DEAD；若为猎人且非毒死，触发_handle_hunter_skill()
+werewolf_explode：_handle_explode(event) → 终止当前白天阶段，更新game_state[phase]为NIGHT
+7. Agent 数据流转与决策逻辑架构图
+模块划分：
+外部输入：状态查询响应（如狼同伴列表）、法官事件广播（如 phase_change）
+内部处理：状态更新器（同步存活 / 死亡状态）、事件处理器（分类处理不同事件）、记忆管理器（筛选关键记忆）、决策引擎（生成行动）
+数据存储：
+GameState（存储阶段、天数、存活玩家、警长信息）
+KnownPlayers（玩家号码、发言记录、身份推测概率）
+MemoryEntries（事件记忆：按时间排序，保留最近 10 条关键事件）
+Strategy（当前策略：如狼人 “悍跳预言家 + 警徽流警上 1 警下 7”）
+输出：行动提交（kill/check/vote）、发言提交（如预言家报查验发言）
+流转逻辑：
+外部输入 → 内部处理模块（如事件处理器解析 phase_change）→ 更新数据存储（如 GameState 阶段改为daytime_discussion）→ 决策引擎读取数据（如读取 KnownPlayers 中身份存疑玩家）→ 生成输出（如投票给身份存疑玩家）
+8. 多 Agent（狼人、预言家、村民）与法官的游戏交互时序图
+参与组件：Judge、Agent1 (狼人)、Agent2 (预言家)、Agent3 (村民)
+流程：
+夜晚开始：Judge 推送phase_change: daytime→werewolf_night至所有 Agent
+Agent1（狼人）触发_on_werewolf_night() → 查询狼同伴（query_game_state("werewolf_partners")）→ Judge 返回数据 → 决策夜间行动（LLM 生成目标，优先刀女巫）→ 提交kill行动（target_id="p3"）→ Judge 确认（验证是否统一意见，是则记录目标）
+Judge 推送phase_change: werewolf_night→seer_night至所有 Agent
+Agent2（预言家）触发_on_seer_night() → 决策查验目标（选择发言疑点多的p5）→ 提交check行动 → Judge 返回查验结果（拇指向上，好人）→ Agent2 存储结果至记忆
+Judge 推送phase_change: seer_night→witch_night至所有 Agent
+女巫 Agent 触发_on_witch_night() → 接收法官告知的p3死亡信息 → 决策不用解药（LLM 判断风险）→ 提交no_potion行动 → Judge 确认
+天亮：Judge 推送night_reveal事件（死者p3）至所有 Agent → Agent3（村民）接收后更新记忆
+Judge 推送phase_change: seer_night→daytime_discussion至所有 Agent
+讨论阶段：Agent2（预言家）提交发言（“我是预言家，昨晚验 p5 是好人，警徽流警上 2 警下 6”）→ Judge 广播；Agent1（狼人）提交悍跳发言（“我才是真预言家，验 p7 是查杀，警徽流警上 4 警下 8”）→ Judge 广播
+Judge 推送phase_change: daytime_discussion→daytime_voting至所有 Agent
+投票阶段：Agent1（狼人）决策投票目标（Agent2，预言家）→ 提交vote行动（target_id="p2"）；Agent3（村民）根据发言投票给p7（狼人查杀目标）→ Judge 收集投票 → 推送vote_result事件（p2得票最多被放逐）→ 各 Agent 更新记忆 / 策略
+9. 狼人角色夜晚行动的决策流程时序图
+参与组件：Agent（狼人）、DecisionEngine、AgentMemory、LLMCient、CommClient、Judge Server
+流程：
+Agent 触发狼人夜阶段 → 调用_can_act()（判断存活）、_is_my_turn()（判断当前为werewolf_night）→ 均为 True
+准备决策上下文：
+调用AgentMemory.get_memory_summary(limit=5) → 获取近期关键事件（如白天p2跳预言家）
+调用query_game_state("werewolf_partners") → CommClient 发送请求 → Judge Server 返回狼同伴列表（p1/p4/p7）→ 存储至 GameState
+决策目标生成：
+Agent 调用DecisionEngine.decide_night_action(Role.WEREWOLF, context) → 决策引擎加载狼人策略（屠边优先杀神职，当前推测p2为预言家）
+决策引擎调用LLMCient.make_decision() → 输入上下文（狼同伴、记忆摘要、神职推测）→ LLM 返回目标（target_id="p2"）
+行动提交与确认：
+Agent 调用submit_action("submit_night_action", data={"action":"kill", "target_id":"p2"}) → CommClient 提交请求
+Judge Server 验证（狼同伴是否统一意见）→ 返回 “确认接收” → Agent 记录行动至actions_taken
+记忆更新：AgentMemory 添加行动事件（“狼人夜提交 kill 行动，目标 p2”）→ 标记为高重要性

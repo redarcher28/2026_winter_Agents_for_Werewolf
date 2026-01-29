@@ -1,0 +1,219 @@
+策略集成流程（Strategy Integration Flow）
+版本：v1.0
+日期：2026-01-14
+
+------------------------------------------------------------
+1. 目标与范围
+------------------------------------------------------------
+目标：将“角色策略（提示词/规则）”稳定集成到 Agent 框架，使 Agent 能在法官系统驱动的各阶段事件下，生成并提交合法行动（发言/投票/夜间技能）。
+
+范围：
+- 策略输入：来自法官系统的事件（phase_change/player_speech/vote_result/night_reveal等）、公共游戏状态、角色私有信息（权限过滤后）、AgentMemory摘要、KnownPlayers（身份推测）。
+- 策略输出：结构化的 StrategyDecision（speech / vote / night_action / no_op），并映射到法官系统WebSocket动作提交接口。
+- 策略集成不包含：法官系统核心规则实现、WebSocket服务器实现、LLM供应商选型细节。
+
+------------------------------------------------------------
+2. 参与组件与职责
+------------------------------------------------------------
+- 法官系统（Judge Server）
+  - 推送事件：phase_change/player_speech/vote_result/night_reveal/player_death等
+  - 接收动作：submit_speech/submit_vote/submit_night_action
+  - 提供查询：query_public_state/query_role_info/get_config
+
+- Agent框架（Agent Base）
+  - 维护生命周期与状态机（INITIALIZING/CONNECTING/PLAYING/DEAD等）
+  - 消费事件队列并更新 GameState、KnownPlayers、MemoryEntries
+  - 在“需要决策”的节点调用策略模块，并将结果提交给法官系统
+
+- 策略模块（Strategy Pack / Strategy Engine）
+  - 角色策略：狼人/预言家/女巫/村民（可扩展猎人/白痴）
+  - 生成结构化决策：目标选择、发言文本、投票对象、用药/验人/刀人等
+  - 提供兜底策略（fallback）：在LLM超时/解析失败时返回安全默认行动
+
+- LLM Client（可选但通常存在）
+  - 基于策略提示词+上下文生成决策草案（必须可解析为结构化结果）
+
+------------------------------------------------------------
+3. 关键数据对象（集成视角）
+------------------------------------------------------------
+- GameState（公共）
+  - game_id、phase、day_number、alive_players、dead_players、time_remaining等
+
+- RolePrivateInfo（角色私有，权限过滤后）
+  - werewolf_partners（狼人同伴列表）
+  - seer_check_history（预言家历史查验结果）
+  - witch_potions（女巫解药/毒药剩余、是否可自救等规则）
+  - （可扩展）hunter_can_shoot、idiot_revealed等
+
+- AgentMemory / MemorySummary
+  - 近期关键事件摘要（如“2号跳预言家，报3号金水；1号对2号攻击”等）
+
+- KnownPlayers（身份推测）
+  - 每个玩家的阵营/身份概率、关键发言要点、投票绑定关系等
+
+- StrategyDecision（策略输出）
+  - decision_type: speech | vote | night_action | no_op
+  - payload: content/target_id/action_type 等（详见“策略集成接口文档”）
+
+------------------------------------------------------------
+4. 总体时序（从启动到结束）
+------------------------------------------------------------
+4.1 启动与连接
+1) Agent 启动，进入 CONNECTING。
+2) 通过 WebSocket 连接：ws://judge-server/game/{game_id}/agent/{agent_id}，鉴权成功后进入 CONNECTED。
+3) Agent 拉取配置：
+   - get_config(agent_settings)
+   - query_role_info(my_role 或角色私有信息入口)
+4) Agent 进入 PLAYING，启动事件主循环，等待法官事件。
+
+4.2 事件驱动的“策略调用-提交行动”闭环
+1) 法官推送事件（如 phase_change）。
+2) Agent 将事件入队并更新内部状态（GameState/Memory/KnownPlayers）。
+3) 若事件意味着“轮到我决策”（例如进入 werewolf_night 且自己存活），Agent 构造 StrategyContext。
+4) 调用 StrategyEngine.decide(context) 获取 StrategyDecision。
+5) Agent 校验决策合法性（阶段/目标存活/技能可用）。
+6) Agent 映射为法官系统动作并提交（submit_night_action/submit_vote/submit_speech）。
+7) 收到 action_accepted/action_confirmed 后写入 MemoryEntries（用于复盘与后续决策）。
+
+------------------------------------------------------------
+5. 分阶段策略集成流程（核心）
+------------------------------------------------------------
+说明：阶段名称与事件类型以现有“Agent调度接口文档/流程”中的定义为准。
+
+5.1 夜晚：狼人阶段（werewolf_night）
+触发条件：
+- 收到 phase_change.new_phase == "werewolf_night"
+- 自己存活且角色为狼人
+
+输入构造（StrategyContext关键字段）：
+- public_state（alive/dead/时间/天数）
+- werewolf_partners（query_role_info: werewolf_partners）
+- memory_summary（近期发言/投票/夜晚结果）
+- known_players（神职/好人/狼人倾向）
+
+策略输出（示例）：
+- night_action: {"action_type":"kill","target_id":"player_003"}
+或
+- night_action: {"action_type":"explode"}（若规则支持“狼人自爆”，且由法官系统允许）
+或
+- no_op（兜底，避免非法动作）
+
+提交：
+- submit_night_action(action_type=kill, target_id=xxx, round=day_number)
+
+5.2 夜晚：预言家阶段（seer_night）
+触发条件：
+- 收到 phase_change.new_phase == "seer_night"
+- 自己存活且角色为预言家
+
+策略输出：
+- night_action: {"action_type":"check","target_id":"player_004"}
+
+提交：
+- submit_night_action(action_type=check, target_id=xxx, round=day_number)
+接收查验结果：
+- 来自 query_role_info 或法官专门回执（以法官系统实现为准）
+- 结果写入记忆：seer_check_history 与 MemoryEntries
+
+5.3 夜晚：女巫阶段（witch_night）
+触发条件：
+- 收到 phase_change.new_phase == "witch_night"
+- 自己存活且角色为女巫
+
+输入补充：
+- witch_potions（剩余解药/毒药/是否可自救）
+- 法官告知“今夜被刀玩家”（可通过 night_reveal/专用字段/查询接口，取决于法官实现）
+
+策略输出：
+- night_action: {"action_type":"save","target_id":"player_004"} 或 {"action_type":"poison","target_id":"player_007"} 或 {"action_type":"no_potion"}
+
+提交：
+- submit_night_action(action_type=save/poison/no_potion, target_id可选, round=day_number)
+
+5.4 白天：讨论发言（daytime_discussion）
+触发条件：
+- 收到 phase_change.new_phase == "daytime_discussion"
+- 或收到“轮到你发言”的指令事件（若法官系统细化发言轮次）
+
+策略输出：
+- speech: {"content":"...","speech_round":day_number,"turn_order":x}
+
+提交：
+- submit_speech(content=..., speech_round=..., turn_order=...)
+
+5.5 白天：投票（daytime_voting）
+触发条件：
+- 收到 phase_change.new_phase == "daytime_voting"
+- 自己存活且允许投票
+
+策略输出：
+- vote: {"target_id":"player_005","round":day_number}
+
+提交：
+- submit_vote(target_id=..., round=day_number)
+结果处理：
+- 接收 vote_result 事件，更新 KnownPlayers（绑定/对立关系）与 MemoryEntries
+
+5.6 死亡/技能触发（player_death / 角色技能）
+触发条件：
+- 收到 player_death 且自己死亡
+- 若角色为猎人且规则允许开枪（非毒死等条件），触发一次决策
+
+策略输出：
+- night_action: {"action_type":"shoot","target_id":"player_009"} 或 no_op
+
+------------------------------------------------------------
+6. 策略选择、版本管理与回退
+------------------------------------------------------------
+6.1 策略包组织（建议）
+- strategies/
+  - werewolf_prompt.txt
+  - seer_prompt.txt
+  - witch_prompt.txt
+  - villager_prompt.txt
+  - （可选）variants/ 用于A/B测试与对抗策略
+
+6.2 选择规则
+- 按 role + phase 选择策略模板（例如狼人夜：kill策略；白天：伪装发言策略）
+- 支持通过配置覆盖：agent_settings.strategy_version / speech_style / risk_tolerance等
+
+6.3 回退策略（必须）
+- LLM调用超时/异常：返回安全 no_op 或规则最小行动（如投票随机存活玩家，但避免投自己/已死）
+- 输出解析失败：重试一次（可换更强约束提示词），再失败走兜底
+- 动作被法官拒绝（INVALID_TARGET/INVALID_PHASE）：立即重新决策一次（约束更严格），再失败 no_op
+
+------------------------------------------------------------
+7. 决策校验与风控（集成必须做的“硬约束”）
+------------------------------------------------------------
+- 阶段校验：只在当前 phase 对应的 allowed_actions 内提交对应动作（例如白天投票阶段只允许 vote/speak 等）
+- 目标校验：target_id 必须存在且存活，且符合技能规则（例如女巫解药是否可自救）
+- 次数校验：投票/夜晚行动每阶段最多一次（除非法官允许重投/平票重投）
+- 超时控制：在 time_remaining 内完成；否则提交 no_op 或最小合法动作
+
+------------------------------------------------------------
+8. 记忆与复盘（策略集成需写入的日志点）
+------------------------------------------------------------
+建议每次决策至少记录：
+- 输入摘要：phase、day_number、alive列表、关键记忆摘要hash/简述
+- 输出：decision_type、action_type/target_id、speech内容（如允许）
+- 回执：action_accepted/错误码
+- 结果事件：night_reveal、vote_result、player_death
+
+------------------------------------------------------------
+9. 集成测试流程（策略组交付验收）
+------------------------------------------------------------
+9.1 Mock对接（Day 3-4）
+- 使用Mock Judge推送固定事件序列：phase_change → speech → voting → vote_result → night_reveal
+- 断言策略输出可解析、动作提交格式正确、不会因非法目标导致崩溃
+
+9.2 端到端（Day 5+）
+- 目标：至少6个AI Agent参与，能稳定跑完3回合，正确判胜负
+- 指标：超时率、非法动作率、平均回合耗时、LLM调用次数
+
+------------------------------------------------------------
+10. 常见异常与处理建议
+------------------------------------------------------------
+- 事件乱序/重复：以 event_id 去重；以 GameState.phase 为准
+- 断线重连：回到 CONNECTING，重连后 query_public_state 恢复上下文
+- 信息权限不足：策略必须适配“只拿到公共信息”的情况，避免假设私有信息必然存在
+- LLM输出漂移：要求严格 JSON 输出；解析失败则走兜底与重试
