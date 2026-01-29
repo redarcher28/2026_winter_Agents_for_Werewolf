@@ -1,0 +1,300 @@
+## AI Agent可用接口文档
+
+### 1. WebSocket连接接口
+
+```python
+# 连接端点
+ws://judge-server/game/{game_id}/agent/{agent_id}
+
+# 连接参数
+headers = {
+    "Authorization": "Bearer {agent_token}",
+    "X-Agent-Role": "{role_name}",
+    "X-Game-Version": "1.0"
+}
+
+# 心跳机制
+# 客户端每30秒发送ping，服务器回应pong
+{
+    "type": "ping",
+    "timestamp": "2024-01-20T10:00:00Z"
+}
+```
+
+### 2. 游戏状态查询接口
+
+```python
+# 请求公共游戏信息
+{
+    "request_id": "req_001",
+    "action": "query_public_state",
+    "params": {}
+}
+
+# 响应示例
+{
+    "response_to": "req_001",
+    "data": {
+        "game_id": "game_123",
+        "phase": "daytime_discussion",
+        "day_number": 3,
+        "alive_players": [
+            {"id": "p1", "name": "玩家1", "is_ai": true},
+            {"id": "p2", "name": "玩家2", "is_ai": false}
+        ],
+        "dead_players": [
+            {"id": "p3", "name": "玩家3", "death_reason": "狼人击杀"}
+        ],
+        "time_remaining": 120  # 秒
+    }
+}
+
+# 请求角色特定信息（权限过滤后）
+{
+    "request_id": "req_002",
+    "action": "query_role_info",
+    "params": {
+        "info_type": "werewolf_partners"  # 或 "seer_check_history", "witch_potions"
+    }
+}
+```
+
+### 3. 行动提交接口
+
+```python
+# 提交投票
+{
+    "action": "submit_vote",
+    "data": {
+        "voter_id": "agent_001",
+        "target_id": "player_005",
+        "round": 3
+    },
+    "timestamp": "2024-01-20T10:00:00Z"
+}
+
+# 提交夜晚行动（狼人杀人）
+{
+    "action": "submit_night_action",
+    "data": {
+        "action_type": "kill",
+        "performer_id": "werewolf_001",
+        "target_id": "player_003",
+        "round": 2
+    }
+}
+
+# 提交夜晚行动（预言家验人）
+{
+    "action": "submit_night_action",
+    "data": {
+        "action_type": "check",
+        "performer_id": "seer_001",
+        "target_id": "player_004",
+        "round": 2
+    }
+}
+
+# 提交发言
+{
+    "action": "submit_speech",
+    "data": {
+        "speaker_id": "agent_001",
+        "content": "我认为5号玩家行为可疑...",
+        "speech_round": 1,
+        "turn_order": 3
+    }
+}
+```
+
+### 4. 事件监听接口
+
+```python
+# 阶段变更事件
+{
+    "event_type": "phase_change",
+    "event_id": "evt_phase_001",
+    "timestamp": "2024-01-20T10:00:00Z",
+    "data": {
+        "old_phase": "werewolf_night",
+        "new_phase": "seer_night",
+        "announcement": "狼人请闭眼，预言家请睁眼"
+    }
+}
+
+# 玩家发言事件
+{
+    "event_type": "player_speech",
+    "event_id": "evt_speech_001",
+    "timestamp": "2024-01-20T10:01:00Z",
+    "data": {
+        "player_id": "player_002",
+        "player_name": "张三",
+        "content": "我是预言家，昨晚查验了3号是好身份",
+        "speech_round": 1,
+        "is_ai": false
+    }
+}
+
+# 投票结果事件
+{
+    "event_type": "vote_result",
+    "event_id": "evt_vote_001",
+    "timestamp": "2024-01-20T10:05:00Z",
+    "data": {
+        "round": 1,
+        "votes": {
+            "player_001": "player_005",
+            "player_002": "player_005",
+            "player_003": "player_006"
+        },
+        "result": {
+            "exiled_player": "player_005",
+            "vote_count": 2,
+            "is_tie": false
+        },
+        "announcement": "5号玩家被放逐，请发表遗言"
+    }
+}
+
+# 夜晚行动揭示事件
+{
+    "event_type": "night_reveal",
+    "event_id": "evt_night_001",
+    "timestamp": "2024-01-20T10:06:00Z",
+    "data": {
+        "round": 1,
+        "deaths": [
+            {"player_id": "player_004", "cause": "werewolf_kill"}
+        ],
+        "saves": [
+            {"player_id": "player_004", "by_witch": true}
+        ],
+        "announcement": "昨晚是平安夜，无人死亡"
+    }
+}
+```
+
+### 5. 配置与设置接口
+
+```python
+# 获取Agent配置
+{
+    "action": "get_config",
+    "params": {
+        "config_type": "agent_settings"
+    }
+}
+
+# 设置Agent偏好
+{
+    "action": "set_preferences",
+    "data": {
+        "speech_style": "conservative",  # aggressive/moderate/conservative
+        "risk_tolerance": 0.7,           # 0.0-1.0
+        "trust_threshold": 0.6,          # 0.0-1.0
+        "decision_delay": 2.5            # 秒，模拟思考时间
+    }
+}
+```
+
+### 6. 错误处理接口
+
+```python
+# 错误响应格式
+{
+    "error": {
+        "code": "INVALID_ACTION",
+        "message": "当前阶段不允许执行此行动",
+        "details": {
+            "current_phase": "daytime_discussion",
+            "allowed_actions": ["speak", "hand_raise"]
+        }
+    }
+}
+
+# 常见错误代码
+ERROR_CODES = {
+    "UNAUTHORIZED": "未授权的访问",
+    "INVALID_PHASE": "当前游戏阶段不允许",
+    "INVALID_TARGET": "目标玩家无效或已死亡",
+    "TIMEOUT": "操作超时",
+    "GAME_NOT_FOUND": "游戏不存在",
+    "AGENT_NOT_REGISTERED": "Agent未注册"
+}
+```
+
+## AI Agent调用时序示例
+
+
+
+
+
+
+
+## 接口使用示例代码
+
+```python
+class SimpleWerewolfAgent:
+    def __init__(self, agent_id, game_id, server_url):
+        self.agent_id = agent_id
+        self.game_id = game_id
+        self.ws_client = WebSocketClient(server_url)
+        self.memory = AgentMemory()
+        self.llm = LLMClient()
+        
+    async def play_game(self):
+        # 1. 连接到游戏
+        await self.ws_client.connect(
+            f"{self.game_id}/agent/{self.agent_id}"
+        )
+        
+        # 2. 监听游戏事件
+        async for event in self.ws_client.listen():
+            self.memory.add_event(event)
+            
+            if event.type == "phase_change":
+                await self.handle_phase_change(event)
+            elif event.type == "player_speech":
+                await self.analyze_speech(event)
+            elif event.type == "vote_result":
+                await self.update_strategy(event)
+                
+    async def handle_phase_change(self, event):
+        """处理阶段变更"""
+        new_phase = event.data["new_phase"]
+        
+        if new_phase == "werewolf_night":
+            # 狼人夜晚行动
+            await self.take_werewolf_night_action()
+        elif new_phase == "daytime_discussion":
+            # 白天发言
+            await self.participate_discussion()
+        elif new_phase == "daytime_voting":
+            # 投票
+            await self.cast_vote()
+            
+    async def take_werewolf_night_action(self):
+        """狼人夜晚杀人决策"""
+        # 查询同伴信息
+        partners = await self.ws_client.query("werewolf_partners")
+        
+        # 查询可杀目标
+        game_state = await self.ws_client.query("public_state")
+        alive_players = game_state["alive_players"]
+        
+        # LLM决策选择目标
+        decision_context = {
+            "partners": partners,
+            "alive_players": alive_players,
+            "game_history": self.memory.get_summary()
+        }
+        
+        target = await self.llm.decide_kill_target(decision_context)
+        
+        # 提交行动
+        await self.ws_client.submit_action({
+            "action_type": "kill",
+            "target": target
+        })
+```
