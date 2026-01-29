@@ -1,0 +1,35 @@
+涉及组件：
+AI Agent、WebSocket API、GameState Manager、Permission Filter、Game Loop Controller
+流程阶段 1：游戏开始连接
+AI Agent → WebSocket API：发送 connect(game_id, agent_id, token)
+WebSocket API → Permission Filter：请求 “验证 Agent 身份”
+Permission Filter → WebSocket API：返回 “验证通过”
+WebSocket API → AI Agent：返回 connection_established
+流程阶段 2：游戏进行中 - 夜览阶段
+Game Loop Controller → WebSocket API：发送 broadcast_phase_change(werewolf_night)
+WebSocket API → AI Agent：传递阶段变更事件，AI Agent “收到阶段变更事件”
+AI Agent → WebSocket API：发送 query_role_info(werewolf_partners)
+WebSocket API → Permission Filter：请求 “过滤权限信息”
+Permission Filter → GameState Manager：请求 “获取狼人同伴信息”
+GameState Manager → Permission Filter：返回同伴列表 [“wolf_002”, “wolf_003”]
+Permission Filter → WebSocket API：返回 “过滤后信息”
+WebSocket API → AI Agent：传递同伴列表，AI Agent “返回同伴列表”
+AI Agent（LLM 决策选目标）→ WebSocket API：发送 submit_night_action(“kill”, “player_005”)
+WebSocket API → GameState Manager：请求 “提交夜晚行动”
+GameState Manager → Game Loop Controller：请求 “记录行动”
+Game Loop Controller → GameState Manager：返回 “行动记录成功”
+GameState Manager → WebSocket API：返回 action_accepted
+WebSocket API → AI Agent：传递 action_confirmed，AI Agent “收到行动确认”
+流程阶段 3：白天发言阶段
+Game Loop Controller → WebSocket API：发送 broadcast_player_speech(玩家发言)
+WebSocket API → AI Agent：传递发言内容，AI Agent “收到其他玩家发言”
+AI Agent（分析发言、生成回应）→ WebSocket API：发送 submit_speech(“我认为2号可能是真预言家…”)
+流程阶段 4：投票阶段
+Game Loop Controller → WebSocket API：发送 broadcast_voting_start()
+WebSocket API → AI Agent：传递通知，AI Agent “收到投票开始通知”
+AI Agent（LLM 分析选目标）→ WebSocket API：发送 submit_vote(“player_002”)
+WebSocket API → GameState Manager：请求 “统计投票结果”
+GameState Manager → Game Loop Controller：请求 “投票结算”
+Game Loop Controller → GameState Manager：返回 “投票结果”
+GameState Manager → WebSocket API：发送 broadcast_vote_result()
+WebSocket API → AI Agent：传递结果，AI Agent “收到投票结果”
