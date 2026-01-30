@@ -6,7 +6,7 @@ from collections import Counter
 from typing import Dict, Any, List, Optional, Tuple, Callable
 
 # ==========================================
-# 1. 基础配置 (保持原样)
+# 1. 基础配置 (完全保留你的定义)
 # ==========================================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("WerewolfBLL")
@@ -38,7 +38,7 @@ bus = EventBus()
 
 
 # ==========================================
-# 4. 状态管理器 (GSM) - 扩展 12 人局神职
+# 4. 状态管理器 (GSM)
 # ==========================================
 class GameStateManager:
     def __init__(self, dm: IDataManager, game_id: str = "ROOM_888"):
@@ -49,7 +49,6 @@ class GameStateManager:
             "phase": "NIGHT",
             "day_count": 1,
             "players": {
-                # 1-4狼，5预言家(SEER)，6女巫(WITCH)，7-8猎人白痴(GOD)，9-12民
                 **{str(i): {"role": "WEREWOLF", "alive": True} for i in range(1, 5)},
                 "5": {"role": "SEER", "alive": True},
                 "6": {"role": "WITCH", "alive": True, "has_heal": True, "has_poison": True},
@@ -59,8 +58,8 @@ class GameStateManager:
             },
             "current_votes": {},
             "night_kill_target": None,
-            "night_heal_target": None,  # 女巫救人目标
-            "night_poison_target": None,  # 女巫毒人目标
+            "night_heal_target": None,
+            "night_poison_target": None,
             "game_over": False,
             "winner": None
         }
@@ -88,7 +87,7 @@ class GameStateManager:
 
 
 # ==========================================
-# 5. 校验层 (PF & GRE) - 增加神职校验
+# 5. 校验层 (PF & GRE)
 # ==========================================
 class PermissionFilter:
     def __init__(self, gsm: GameStateManager):
@@ -143,7 +142,7 @@ class RuleEngine:
 
 
 # ==========================================
-# 6. 核心流程控制器 (GLC) - 修复死循环时序
+# 6. 核心流程控制器 (GLC)
 # ==========================================
 class GameLoopController:
     def __init__(self, gsm: GameStateManager):
@@ -152,31 +151,25 @@ class GameLoopController:
 
     async def handle_agent_action(self, action_data: Dict):
         req_id = f"local_act_{uuid.uuid4().hex[:6]}"
-        # 【修正】引入 Event 确保动作完成后主循环再继续
         done_ev = asyncio.Event()
         self.sync_registry[req_id] = {"pf": False, "gre": False, "raw": action_data, "event": done_ev}
-
         await bus.publish("INBOUND_ACTION", {"id": req_id, "data": action_data})
-        await done_ev.wait()  # 阻塞主循环
+        await done_ev.wait()
         return req_id
 
     async def on_validation_callback(self, res: Dict, source: str):
         rid = res["id"]
         if rid not in self.sync_registry: return
         entry = self.sync_registry[rid]
-
         if not res["ok"]:
             logger.warning(f"行动拒绝 [{rid}]: {res['msg']}")
             entry["event"].set()
             del self.sync_registry[rid]
             return
-
         entry[source] = True
         if entry["pf"] and entry["gre"]:
             cmd = entry["raw"]
             uid, tid = str(cmd["user_id"]), str(cmd.get("target_id"))
-
-            # 业务执行逻辑
             if cmd["action"] == "KILL":
                 await self.gsm.commit_change({"kill": tid})
             elif cmd["action"] == "VERIFY":
@@ -188,26 +181,20 @@ class GameLoopController:
                 await self.gsm.commit_change({"poison": tid, "players": {uid: {"has_poison": False}}})
             elif cmd["action"] == "VOTE":
                 await self.gsm.commit_change({"vote": (uid, tid)})
-
             logger.info(f"行动成功: {uid} {cmd['action']} -> {tid}")
-            entry["event"].set()  # 释放主循环
+            entry["event"].set()
             del self.sync_registry[rid]
 
     async def settle_night(self):
         s = self.gsm.state
         kill, heal, poison = s["night_kill_target"], s["night_heal_target"], s["night_poison_target"]
-
         dead_list = []
         if kill and kill != heal: dead_list.append(kill)
         if poison: dead_list.append(poison)
-
         for pid in set(dead_list):
             await self.gsm.commit_change({"players": {pid: {"alive": False}}})
             logger.info(f"📢 [公告] {pid} 号昨晚不幸遇害")
-
         if not dead_list: logger.info("📢 [公告] 昨晚是个平安夜")
-
-        # 清理夜间临时状态
         await self.gsm.commit_change({"kill": None, "heal": None, "poison": None})
         await self._check_victory()
 
@@ -223,13 +210,7 @@ class GameLoopController:
         p = self.gsm.state["players"]
         wolves = [i for i, v in p.items() if v["alive"] and v["role"] == "WEREWOLF"]
         goods = [i for i, v in p.items() if v["alive"] and v["role"] != "WEREWOLF"]
-
-        winner = None
-        if not wolves:
-            winner = "GOOD_SIDE"
-        elif not goods:
-            winner = "WOLF_SIDE"
-
+        winner = "GOOD_SIDE" if not wolves else "WOLF_SIDE" if not goods else None
         if winner:
             await self.gsm.commit_change({"game_over": True, "winner": winner})
             logger.info(f"🏆 游戏结束！获胜方: {winner}")
@@ -237,63 +218,72 @@ class GameLoopController:
     async def run_game_loop(self):
         logger.info("🚀 游戏启动...")
         while not self.gsm.state["game_over"]:
-            logger.info(f"\n--- 第 {self.gsm.state['day_count']} 天 ---")
-
-            # 1. 夜晚 (顺序: 狼人 -> 女巫 -> 预言家)
+            day = self.gsm.state["day_count"]
+            logger.info(f"\n--- 第 {day} 天 ---")
             await self.gsm.commit_change({"phase": "NIGHT"})
+
+            # --- 动态获取活人 ---
             wolves = [i for i, p in self.gsm.state["players"].items() if p["alive"] and p["role"] == "WEREWOLF"]
-            if wolves:
-                await self.handle_agent_action({"user_id": wolves[0], "action": "KILL", "target_id": "9"})
+            others = [i for i, p in self.gsm.state["players"].items() if p["alive"] and p["role"] != "WEREWOLF"]
 
+            # 1. 狼人杀人
+            if wolves and others: await self.handle_agent_action(
+                {"user_id": wolves[0], "action": "KILL", "target_id": others[0]})
+
+            # 2. 女巫行动
             witch = self.gsm.state["players"]["6"]
-            if witch["alive"] and self.gsm.state["night_kill_target"]:
-                await self.handle_agent_action(
-                    {"user_id": "6", "action": "HEAL", "target_id": self.gsm.state["night_kill_target"]})
+            victim = self.gsm.state["night_kill_target"]
+            if witch["alive"]:
+                if victim and witch["has_heal"]:
+                    await self.handle_agent_action({"user_id": "6", "action": "HEAL", "target_id": victim})
+                elif witch["has_poison"] and wolves:
+                    await self.handle_agent_action({"user_id": "6", "action": "POISON", "target_id": wolves[-1]})
 
+            # 3. 预言家行动
             seer = self.gsm.state["players"]["5"]
             if seer["alive"]:
-                await self.handle_agent_action({"user_id": "5", "action": "VERIFY", "target_id": "1"})
+                targets = [i for i, p in self.gsm.state["players"].items() if p["alive"] and i != "5"]
+                if targets: await self.handle_agent_action(
+                    {"user_id": "5", "action": "VERIFY", "target_id": targets[0]})
 
-            # 2. 黎明结算
+            # 结算 & 投票
             await self.gsm.commit_change({"phase": "DAY"})
             await self.settle_night()
             if self.gsm.state["game_over"]: break
 
-            # 3. 投票
             alives = [i for i, p in self.gsm.state["players"].items() if p["alive"]]
+            # 简单的投票策略：好人投狼，狼人乱投
+            target_wolf = wolves[0] if wolves else alives[0]
             for pid in alives:
-                target = [i for i in alives if i != pid][0] if len(alives) > 1 else alives[0]
-                await self.handle_agent_action({"user_id": pid, "action": "VOTE", "target_id": target})
+                t = target_wolf if self.gsm.state["players"][pid]["role"] != "WEREWOLF" else \
+                [x for x in alives if x != pid][0]
+                await self.handle_agent_action({"user_id": pid, "action": "VOTE", "target_id": t})
 
             await self.settle_votes()
-            await self.gsm.commit_change({"day_count": self.gsm.state["day_count"] + 1})
+            await self.gsm.commit_change({"day_count": day + 1})
 
 
 # ==========================================
-# 7. 本地集成 (保持原样)
+# 7. 本地集成
 # ==========================================
 class LocalDataManager(IDataManager):
-    async def save_game_state(self, game_id, state): return True
+    async def save_game_state(self, i, s): return True
 
-    async def load_game_state(self, game_id): return None
+    async def load_game_state(self, i): return None
 
 
 async def main():
-    dm = LocalDataManager()
-    gsm = GameStateManager(dm)
+    gsm = GameStateManager(LocalDataManager())
     glc = GameLoopController(gsm)
     pf, gre = PermissionFilter(gsm), RuleEngine(gsm)
-
     bus.subscribe("INBOUND_ACTION", pf.validate)
     bus.subscribe("INBOUND_ACTION", gre.validate)
     bus.subscribe("PF_DONE", lambda r: glc.on_validation_callback(r, "pf"))
     bus.subscribe("GRE_DONE", lambda r: glc.on_validation_callback(r, "gre"))
-
     await glc.run_game_loop()
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == "__main__": asyncio.run(main())
 
 
 
