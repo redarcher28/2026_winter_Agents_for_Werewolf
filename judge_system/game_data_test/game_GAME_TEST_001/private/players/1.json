@@ -1,0 +1,8 @@
+{
+  "player_id": "1",
+  "name": "Player_1",
+  "role": "werewolf",
+  "status": "dead",
+  "vote": "2",
+  "speech": ""
+}

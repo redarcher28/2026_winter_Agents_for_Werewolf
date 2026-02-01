@@ -1,0 +1,6 @@
+{
+  "use_heal": true,
+  "use_poison": true,
+  "heal_target": "5",
+  "poison_target": "12"
+}
