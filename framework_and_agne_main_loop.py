@@ -18,9 +18,7 @@ import aiofiles
 import json
 import logging
 import openai
-import numpy as np
-import re
-import hashlib
+
 
 
 # ==================== 数据结构定义 ====================
@@ -2141,7 +2139,7 @@ class LLMClient:
     def __init__(self, config: LLMConfig):
         self.config = config
         self.logger = logging.getLogger(f"LLMClient-{self.config.provider}")
-        
+
         if self.config.provider == "openai":
             from openai import AsyncOpenAI
             self.client = AsyncOpenAI(api_key=self.config.api_key)
